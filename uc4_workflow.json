@@ -1,0 +1,299 @@
+{
+  "name": "UC4 - TFS Real-Time Screening & Freeze Orchestration (Fixed)",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "tfs-screening-trigger",
+        "httpMethod": "POST",
+        "options": {}
+      },
+      "name": "TFS Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "position": [0, 400],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT customer_id, full_name, cnic, country FROM customers WHERE customer_id = {{ $json.customer_id }};"
+      },
+      "name": "Fetch Customer Details",
+      "type": "n8n-nodes-base.postgres",
+      "position": [200, 400],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT watchlist_id, entity_name, id_number, list_type, country, GREATEST( similarity(lower(entity_name), lower('{{ $node[\"Fetch Customer Details\"].json.full_name }}')), CASE WHEN id_number = '{{ $node[\"Fetch Customer Details\"].json.cnic }}' AND id_number IS NOT NULL THEN 1.0 ELSE 0 END ) AS match_score FROM watchlists ORDER BY match_score DESC LIMIT 1;"
+      },
+      "name": "Screen Against Watchlist",
+      "type": "n8n-nodes-base.postgres",
+      "position": [400, 400],
+      "typeVersion": 1,
+      "notes": "Deterministic SQL match using Postgres pg_trgm trigram similarity + exact CNIC match. Reg 4 §8 requires SBP-REs to 'properly analyze any similarity' - this replaces the external ML microservice with a reproducible, inspectable SQL calculation. Requires: CREATE EXTENSION pg_trgm;"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.match_score }}",
+              "operation": "largerEqual",
+              "value2": 0.9
+            }
+          ]
+        }
+      },
+      "name": "IF High Confidence Match",
+      "type": "n8n-nodes-base.if",
+      "position": [600, 400],
+      "typeVersion": 1,
+      "notes": "Reg 4 §7(a): match >= 0.90 is treated as confirmed and freezes without delay or prior notice."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.match_score }}",
+              "operation": "largerEqual",
+              "value2": 0.6
+            }
+          ]
+        }
+      },
+      "name": "IF Grey Zone Match",
+      "type": "n8n-nodes-base.if",
+      "position": [800, 550],
+      "typeVersion": 1,
+      "notes": "0.60-0.89 requires human review before any freeze action (Reg 4 §8)."
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "options": {
+          "webhookSuffix": "=tfs-analyst-decision/{{ $node[\"Screen Against Watchlist\"].json.watchlist_id }}"
+        }
+      },
+      "name": "Manual Analyst Approval",
+      "type": "n8n-nodes-base.wait",
+      "position": [1000, 550],
+      "typeVersion": 1,
+      "notes": "Pauses execution and exposes a resume webhook URL. Send that URL to the AML analyst (Slack/email) with approve/reject options. Analyst POSTs {\"approved\": true/false} to resume. Reg 4 §8 - human judgement call on the similarity."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.approved }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "IF Analyst Approved",
+      "type": "n8n-nodes-base.if",
+      "position": [1200, 550],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alerts (related_table, related_id, alert_type, severity, status) VALUES ('customers', {{ $node[\"Fetch Customer Details\"].json.customer_id }}, 'TFS_MATCH', 'high', 'open') RETURNING alert_id;"
+      },
+      "name": "Insert TFS Alert",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1000, 250],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE accounts SET status = 'frozen', frozen_reason = 'TFS MATCH - Reg 4' WHERE customer_id = {{ $node[\"Fetch Customer Details\"].json.customer_id }} RETURNING account_id;"
+      },
+      "name": "Freeze Account",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1200, 250],
+      "typeVersion": 1,
+      "notes": "Reg 4 §7(a): freeze immediately, without delay, without prior notice."
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "http://localhost:5678/mock-fmu/str",
+        "jsonParameters": true,
+        "bodyParametersJson": "={\n  \"alert_id\": {{ $node[\"Insert TFS Alert\"].json.alert_id }},\n  \"customer_name\": \"{{ $node[\"Fetch Customer Details\"].json.full_name }}\",\n  \"cnic\": \"{{ $node[\"Fetch Customer Details\"].json.cnic }}\",\n  \"watchlist_id\": {{ $node[\"Screen Against Watchlist\"].json.watchlist_id }},\n  \"match_score\": {{ $node[\"Screen Against Watchlist\"].json.match_score }}\n}"
+      },
+      "name": "File FMU Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1400, 250],
+      "typeVersion": 1,
+      "notes": "Reg 4 §7(b): report frozen assets/attempted transactions to the FMU."
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "sla_due_at",
+              "value": "={{ new Date(Date.now() + 48*60*60*1000).toISOString() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Set SBP SLA Deadline",
+      "type": "n8n-nodes-base.set",
+      "position": [1600, 250],
+      "typeVersion": 1,
+      "notes": "Reg 4 §7(c): freeze must be reported to SBP within 48 hours. This is recorded for the SBP filing payload/reporting - it does not pause the workflow."
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "http://localhost:5678/mock-sbp/freeze-report",
+        "jsonParameters": true,
+        "bodyParametersJson": "={\n  \"customer_id\": {{ $node[\"Fetch Customer Details\"].json.customer_id }},\n  \"account_id\": {{ $node[\"Freeze Account\"].json.account_id }},\n  \"freeze_reported_at\": \"{{ new Date().toISOString() }}\",\n  \"sla_due_at\": \"{{ $json.sla_due_at }}\"\n}"
+      },
+      "name": "File SBP Freeze Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1800, 250],
+      "typeVersion": 1,
+      "notes": "Reg 4 §7(c)."
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "notice_text",
+              "value": "=Dear {{ $node[\"Fetch Customer Details\"].json.full_name }},\n\nYou are hereby notified that account ID {{ $node[\"Freeze Account\"].json.account_id }} has been frozen without prior notice, pursuant to the United Nations Security Council Act, 1948 and the Anti-Terrorism Act, 1997, in accordance with Regulation 4, Section 7(d) of the SBP AML/CFT/CPF Regulations and Form-B of the UNSC (Freezing and Seizure) Order, 2019.\n\nThis action follows a screening match against the sanctions watchlist (Watchlist Reference: {{ $node[\"Screen Against Watchlist\"].json.watchlist_id }}).\n\nDeposits (credits) may continue to be made to this account. No debits or withdrawals will be permitted unless a specific exemption is granted under the applicable order.\n\nIf you believe this action was taken in error, you may request a review under Regulation 4, Sections 9-10 of the SBP AML/CFT/CPF Regulations.\n\nCompliance Department"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Build Form-B Notice",
+      "type": "n8n-nodes-base.set",
+      "position": [2000, 250],
+      "typeVersion": 1,
+      "notes": "Static, deterministic template citing the exact clause. No LLM/RAG needed for a fixed-wording statutory notice - this is simpler and removes hallucination risk entirely."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO documents (related_table, related_id, document_type, retention_years, litigation_hold, file_reference) VALUES ('accounts', {{ $node[\"Freeze Account\"].json.account_id }}, 'FORM_B_NOTICE', 10, FALSE, 'REF-FORM-B-' || {{ $node[\"Fetch Customer Details\"].json.customer_id }}) RETURNING document_id;"
+      },
+      "name": "Store Form-B Document",
+      "type": "n8n-nodes-base.postgres",
+      "position": [2200, 250],
+      "typeVersion": 1,
+      "notes": "Reg 8 §2: 10-year retention on CDD/account-related records, hard-coded not inferred."
+    },
+    {
+      "parameters": {
+        "fromEmail": "compliance@bank-sandbox.local",
+        "toEmail": "={{ $node[\"Fetch Customer Details\"].json.full_name.toLowerCase().replace(' ', '.') }}@synthetic-email.com",
+        "subject": "Notice of Freeze under UNSC (Freezing and Seizure) Order, 2019",
+        "text": "={{ $node[\"Build Form-B Notice\"].json.notice_text }}",
+        "options": {}
+      },
+      "name": "Send Notice Email",
+      "type": "n8n-nodes-base.emailSend",
+      "position": [2400, 250],
+      "typeVersion": 1,
+      "notes": "Reg 4 §7(d)."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_logs (workflow_name, action, actor, reference_table, reference_id, details) VALUES ('TFS_Screening_Freeze', 'ACCOUNT_FROZEN_TFS', 'system', 'accounts', {{ $node[\"Freeze Account\"].json.account_id }}, jsonb_build_object('match_score', {{ $node[\"Screen Against Watchlist\"].json.match_score }}, 'watchlist_id', {{ $node[\"Screen Against Watchlist\"].json.watchlist_id }}));"
+      },
+      "name": "Write Audit Log",
+      "type": "n8n-nodes-base.postgres",
+      "position": [2600, 250],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE alerts SET status = 'processed' WHERE alert_id = {{ $node[\"Insert TFS Alert\"].json.alert_id }};"
+      },
+      "name": "Update Alert Status",
+      "type": "n8n-nodes-base.postgres",
+      "position": [2800, 250],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_logs (workflow_name, action, actor, reference_table, reference_id, details) VALUES ('TFS_Screening_Freeze', 'SCREENING_CLEARED', 'system', 'customers', {{ $node[\"Fetch Customer Details\"].json.customer_id }}, jsonb_build_object('score', {{ $node[\"Screen Against Watchlist\"].json.match_score }}));"
+      },
+      "name": "Log Clear Trace",
+      "type": "n8n-nodes-base.postgres",
+      "position": [800, 750],
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "TFS Trigger": {
+      "main": [[{ "node": "Fetch Customer Details", "type": "main", "index": 0 }]]
+    },
+    "Fetch Customer Details": {
+      "main": [[{ "node": "Screen Against Watchlist", "type": "main", "index": 0 }]]
+    },
+    "Screen Against Watchlist": {
+      "main": [[{ "node": "IF High Confidence Match", "type": "main", "index": 0 }]]
+    },
+    "IF High Confidence Match": {
+      "main": [
+        [{ "node": "Insert TFS Alert", "type": "main", "index": 0 }],
+        [{ "node": "IF Grey Zone Match", "type": "main", "index": 0 }]
+      ]
+    },
+    "IF Grey Zone Match": {
+      "main": [
+        [{ "node": "Manual Analyst Approval", "type": "main", "index": 0 }],
+        [{ "node": "Log Clear Trace", "type": "main", "index": 0 }]
+      ]
+    },
+    "Manual Analyst Approval": {
+      "main": [[{ "node": "IF Analyst Approved", "type": "main", "index": 0 }]]
+    },
+    "IF Analyst Approved": {
+      "main": [
+        [{ "node": "Insert TFS Alert", "type": "main", "index": 0 }],
+        [{ "node": "Log Clear Trace", "type": "main", "index": 0 }]
+      ]
+    },
+    "Insert TFS Alert": {
+      "main": [[{ "node": "Freeze Account", "type": "main", "index": 0 }]]
+    },
+    "Freeze Account": {
+      "main": [[{ "node": "File FMU Report", "type": "main", "index": 0 }]]
+    },
+    "File FMU Report": {
+      "main": [[{ "node": "Set SBP SLA Deadline", "type": "main", "index": 0 }]]
+    },
+    "Set SBP SLA Deadline": {
+      "main": [[{ "node": "File SBP Freeze Report", "type": "main", "index": 0 }]]
+    },
+    "File SBP Freeze Report": {
+      "main": [[{ "node": "Build Form-B Notice", "type": "main", "index": 0 }]]
+    },
+    "Build Form-B Notice": {
+      "main": [[{ "node": "Store Form-B Document", "type": "main", "index": 0 }]]
+    },
+    "Store Form-B Document": {
+      "main": [[{ "node": "Send Notice Email", "type": "main", "index": 0 }]]
+    },
+    "Send Notice Email": {
+      "main": [[{ "node": "Write Audit Log", "type": "main", "index": 0 }]]
+    },
+    "Write Audit Log": {
+      "main": [[{ "node": "Update Alert Status", "type": "main", "index": 0 }]]
+    }
+  }
+}

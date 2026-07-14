@@ -1,0 +1,48 @@
+version: "3.9"
+
+services:
+
+  postgres:
+    image: postgres:16
+    container_name: sbp-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: sbp_user
+      POSTGRES_PASSWORD: sbp_password
+      POSTGRES_DB: sbp_sandbox
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: sbp-n8n
+
+    restart: unless-stopped
+
+    ports:
+      - "5678:5678"
+
+    environment:
+      - DB_TYPE=sqlite
+
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+    depends_on:
+      - postgres
+
+  ml-api:
+    build: ./ml-api
+    container_name: ml-api
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+
+volumes:
+  postgres_data:
+  n8n_data:

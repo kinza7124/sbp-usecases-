@@ -1,0 +1,368 @@
+{
+  "name": "UC7 - NGO/NPO/Charity/Trust Account & Donation-Title Integrity Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1"
+            }
+          ]
+        }
+      },
+      "name": "Trigger — NGO Onboarding / Cron Weekly Review",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [0, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT ngo_account_id, customer_id, registered_title FROM ngo_accounts;"
+      },
+      "name": "Postgres — Fetch NGO Account",
+      "type": "n8n-nodes-base.postgres",
+      "position": [200, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT customer_id, member->>'name' AS name, member->>'cnic' AS cnic FROM ngo_accounts, jsonb_array_elements(COALESCE(governing_body, '[]'::jsonb)) AS member WHERE ngo_account_id = {{ $json.ngo_account_id || 0 }};"
+      },
+      "name": "Postgres — Fetch Governing Body",
+      "type": "n8n-nodes-base.postgres",
+      "position": [400, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "name": "Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [600, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT *, GREATEST(similarity(lower(entity_name), lower('{{ $json.name }}')), CASE WHEN id_number = '{{ $json.cnic }}' THEN 1.0 ELSE 0 END) as match_prob FROM watchlists ORDER BY match_prob DESC LIMIT 1;"
+      },
+      "name": "Postgres — pg_trgm Name-Matching Model",
+      "type": "n8n-nodes-base.postgres",
+      "position": [800, 300],
+      "typeVersion": 1,
+      "notes": "Replaces external ML Name Matching with native Postgres Trigram similarity."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.match_prob }}",
+              "operation": "largerEqual",
+              "value2": 0.85
+            }
+          ]
+        }
+      },
+      "name": "IF — match_probability >= high_confidence",
+      "type": "n8n-nodes-base.if",
+      "position": [1000, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alerts (related_table, related_id, alert_type, severity, status) VALUES ('ngo_accounts', {{ $node[\"Postgres — Fetch NGO Account\"].json.ngo_account_id || 0 }}, 'DPPP_MEMBER', 'high', 'open');"
+      },
+      "name": "Postgres — Insert Alert (DPPP_MEMBER)",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1200, 200],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "mode": "wait",
+        "options": {}
+      },
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "position": [1400, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "advertised_title",
+              "value": "Roshan Foundation for Children"
+            },
+            {
+              "name": "account_number",
+              "value": "ACC-NPO-321"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Set — Advertised Title Input",
+      "type": "n8n-nodes-base.set",
+      "position": [1600, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT registered_title FROM ngo_accounts WHERE ngo_account_id = {{ $node[\"Postgres — Fetch NGO Account\"].json.ngo_account_id || 0 }};"
+      },
+      "name": "Postgres — Fetch Registered Title",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1800, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "http://ml-api:5000/api/match-title",
+        "jsonParameters": true,
+        "bodyParametersJson": "={\n  \"registered\": \"{{ $json.registered_title }}\",\n  \"advertised\": \"{{ $node[\"Set — Advertised Title Input\"].json.advertised_title }}\"\n}"
+      },
+      "name": "HTTP Request — ML Title Semantic-Similarity",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2000, 300],
+      "typeVersion": 1,
+      "notes": "Calls an ML Sentence-Transformer model to evaluate true semantic similarity (not just exact string matches)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.is_match }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "IF — Semantic Match",
+      "type": "n8n-nodes-base.if",
+      "position": [2200, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ngo_accounts SET title_match = true, last_checked = now() WHERE ngo_account_id = {{ $node[\"Postgres — Fetch NGO Account\"].json.ngo_account_id || 0 }};"
+      },
+      "name": "Update title_match (Match)",
+      "type": "n8n-nodes-base.postgres",
+      "position": [2400, 100],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ngo_accounts SET title_match = false, advertised_title = '{{ $node[\"Set — Advertised Title Input\"].json.advertised_title }}', last_checked = now() WHERE ngo_account_id = {{ $node[\"Postgres — Fetch NGO Account\"].json.ngo_account_id || 0 }};"
+      },
+      "name": "Update title_match (Mismatch)",
+      "type": "n8n-nodes-base.postgres",
+      "position": [2400, 400],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alerts (related_table, related_id, alert_type, severity, status) VALUES ('ngo_accounts', {{ $node[\"Postgres — Fetch NGO Account\"].json.ngo_account_id || 0 }}, 'TITLE_MISMATCH', 'high', 'open');"
+      },
+      "name": "Postgres — Insert Alert (TITLE_MISMATCH)",
+      "type": "n8n-nodes-base.postgres",
+      "position": [2600, 400],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "http://ml-api:5000/api/vector-db/query"
+      },
+      "name": "Query Vector Store (RAG)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2800, 400],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "jsonParameters": true,
+        "options": {},
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_GROQ_API_KEY"
+            }
+          ]
+        },
+        "bodyParametersJson": "={\n  \"model\": \"llama3-70b-8192\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are an AML Compliance Officer. Draft an STR narrative based on the provided context.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Context: {{ JSON.stringify($json) }}\"\n    }\n  ]\n}"
+      },
+      "name": "AI Agent — Draft STR Narrative",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [3000, 400],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO str_reports (customer_id, narrative, status) VALUES ({{ $node[\"Postgres — Fetch NGO Account\"].json.customer_id || 0 }}, '{{ $json.text }}', 'draft') RETURNING str_id;"
+      },
+      "name": "Postgres — Insert str_reports (draft)",
+      "type": "n8n-nodes-base.postgres",
+      "position": [3200, 400],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "resume": "webhook"
+      },
+      "name": "Manual Approval — Compliance Officer",
+      "type": "n8n-nodes-base.wait",
+      "position": [3400, 400],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.approved }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "IF — Approved",
+      "type": "n8n-nodes-base.if",
+      "position": [3600, 400],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "https://httpbin.org/post"
+      },
+      "name": "HTTP Request — File STR to FMU",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [3800, 300],
+      "typeVersion": 1,
+      "notes": "Using httpbin for mock execution"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE str_reports SET status = 'filed', filed_at = now() WHERE str_id = {{ $node[\"Postgres — Insert str_reports (draft)\"].json.str_id }};"
+      },
+      "name": "Postgres — Update str_reports.status",
+      "type": "n8n-nodes-base.postgres",
+      "position": [4000, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_logs (workflow_name, action, actor) VALUES ('NGO_Integrity_Monitor', 'WORKFLOW_COMPLETED', 'system');"
+      },
+      "name": "Postgres — Insert Audit Log",
+      "type": "n8n-nodes-base.postgres",
+      "position": [4200, 300],
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "Trigger — NGO Onboarding / Cron Weekly Review": {
+      "main": [[{ "node": "Postgres — Fetch NGO Account", "type": "main", "index": 0 }]]
+    },
+    "Postgres — Fetch NGO Account": {
+      "main": [[{ "node": "Postgres — Fetch Governing Body", "type": "main", "index": 0 }]]
+    },
+    "Postgres — Fetch Governing Body": {
+      "main": [[{ "node": "Split In Batches", "type": "main", "index": 0 }]]
+    },
+    "Split In Batches": {
+      "main": [
+        [{ "node": "Postgres — pg_trgm Name-Matching Model", "type": "main", "index": 0 }]
+      ]
+    },
+    "Postgres — pg_trgm Name-Matching Model": {
+      "main": [[{ "node": "IF — match_probability >= high_confidence", "type": "main", "index": 0 }]]
+    },
+    "IF — match_probability >= high_confidence": {
+      "main": [
+        [{ "node": "Postgres — Insert Alert (DPPP_MEMBER)", "type": "main", "index": 0 }],
+        [{ "node": "Merge", "type": "main", "index": 1 }]
+      ]
+    },
+    "Postgres — Insert Alert (DPPP_MEMBER)": {
+      "main": [[{ "node": "Merge", "type": "main", "index": 0 }]]
+    },
+    "Merge": {
+      "main": [[{ "node": "Set — Advertised Title Input", "type": "main", "index": 0 }]]
+    },
+    "Set — Advertised Title Input": {
+      "main": [[{ "node": "Postgres — Fetch Registered Title", "type": "main", "index": 0 }]]
+    },
+    "Postgres — Fetch Registered Title": {
+      "main": [[{ "node": "HTTP Request — ML Title Semantic-Similarity", "type": "main", "index": 0 }]]
+    },
+    "HTTP Request — ML Title Semantic-Similarity": {
+      "main": [[{ "node": "IF — Semantic Match", "type": "main", "index": 0 }]]
+    },
+    "IF — Semantic Match": {
+      "main": [
+        [{ "node": "Update title_match (Match)", "type": "main", "index": 0 }],
+        [{ "node": "Update title_match (Mismatch)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Update title_match (Match)": {
+      "main": [[{ "node": "Postgres — Insert Audit Log", "type": "main", "index": 0 }]]
+    },
+    "Update title_match (Mismatch)": {
+      "main": [[{ "node": "Postgres — Insert Alert (TITLE_MISMATCH)", "type": "main", "index": 0 }]]
+    },
+    "Postgres — Insert Alert (TITLE_MISMATCH)": {
+      "main": [[{ "node": "Query Vector Store (RAG)", "type": "main", "index": 0 }]]
+    },
+    "Query Vector Store (RAG)": {
+      "main": [[{ "node": "AI Agent — Draft STR Narrative", "type": "main", "index": 0 }]]
+    },
+    "AI Agent — Draft STR Narrative": {
+      "main": [[{ "node": "Postgres — Insert str_reports (draft)", "type": "main", "index": 0 }]]
+    },
+    "Postgres — Insert str_reports (draft)": {
+      "main": [[{ "node": "Manual Approval — Compliance Officer", "type": "main", "index": 0 }]]
+    },
+    "Manual Approval — Compliance Officer": {
+      "main": [[{ "node": "IF — Approved", "type": "main", "index": 0 }]]
+    },
+    "IF — Approved": {
+      "main": [
+        [{ "node": "HTTP Request — File STR to FMU", "type": "main", "index": 0 }],
+        [{ "node": "Postgres — Insert Audit Log", "type": "main", "index": 0 }]
+      ]
+    },
+    "HTTP Request — File STR to FMU": {
+      "main": [[{ "node": "Postgres — Update str_reports.status", "type": "main", "index": 0 }]]
+    },
+    "Postgres — Update str_reports.status": {
+      "main": [[{ "node": "Postgres — Insert Audit Log", "type": "main", "index": 0 }]]
+    },
+    "Postgres — Insert Audit Log": {
+      "main": [[{ "node": "Split In Batches", "type": "main", "index": 0 }]]
+    }
+  }
+}

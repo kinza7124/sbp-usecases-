@@ -1,0 +1,110 @@
+{
+  "name": "UC11 - Cross-Border Wire Transfer Screening",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "wire-transfer",
+        "httpMethod": "POST"
+      },
+      "name": "Wire Transfer Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [0, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM jurisdiction_list WHERE country_name = {{ $json.beneficiary_country }};"
+      },
+      "name": "Check Beneficiary Jurisdiction",
+      "type": "n8n-nodes-base.postgres",
+      "position": [200, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {},
+      "name": "Screen Beneficiary (ML)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [400, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {},
+      "name": "Hold Transfer",
+      "type": "n8n-nodes-base.postgres",
+      "position": [600, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {},
+      "name": "RAG Regulation Retrieval",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [800, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {},
+      "name": "Notify Compliance",
+      "type": "n8n-nodes-base.emailSend",
+      "position": [1000, 300],
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "Wire Transfer Webhook": {
+      "main": [
+        [
+          {
+            "node": "Check Beneficiary Jurisdiction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Beneficiary Jurisdiction": {
+      "main": [
+        [
+          {
+            "node": "Screen Beneficiary (ML)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Screen Beneficiary (ML)": {
+      "main": [
+        [
+          {
+            "node": "Hold Transfer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hold Transfer": {
+      "main": [
+        [
+          {
+            "node": "RAG Regulation Retrieval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RAG Regulation Retrieval": {
+      "main": [
+        [
+          {
+            "node": "Notify Compliance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
