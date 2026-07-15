@@ -43,6 +43,22 @@ services:
     ports:
       - "5000:5000"
 
+  # UC11 — Cross-Border Exposure ML scoring service (port 5001)
+  ml-service:
+    build: ./services/ml_service
+    container_name: ml-service
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+
+  # UC11 — SBP Regulations RAG retrieval service (port 8000)
+  rag-service:
+    build: ./services/rag_service
+    container_name: rag-service
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+
 volumes:
   postgres_data:
   n8n_data:

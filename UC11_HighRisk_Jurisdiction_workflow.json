@@ -1,0 +1,1314 @@
+{
+  "name": "HighRisk_Jurisdiction_Countermeasures_Orchestration",
+  "nodes": [
+    {
+      "id": "67708a16-c451-4cb6-97d1-5fcb43975dfd",
+      "name": "Event Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        400
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "jurisdiction-risk-trigger",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "notes": "Receives either a TRANSACTION event or a jurisdiction LIST_UPDATE event (structured JSON or unstructured FATF/SBP notice text)."
+    },
+    {
+      "id": "3e945209-7fc5-40fe-b6e2-bc2cbfdb9008",
+      "name": "IF Unstructured Notice",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        60,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{$json.event_type}}",
+              "rightValue": "LIST_UPDATE_TEXT",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "notes": "TRUE = payload is an unstructured regulatory notice (free text) that needs AI extraction before it can be routed; FALSE = already-structured payload (TRANSACTION or LIST_UPDATE)."
+    },
+    {
+      "id": "bcd0a927-f61f-4f3f-96ee-7257fcfd0b31",
+      "name": "Query Vector Store - Reg14",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        320,
+        260
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://rag-service:8000/api/v1/collections/sbp_regulations/query",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"query_texts\": [\"high risk jurisdiction counter measures cross border EDD\"], \"n_results\": 3, \"where\": {\"regulation\": {\"$in\": [\"Reg 14\", \"Reg 2\", \"Reg 9\"]}} } }}",
+        "options": {}
+      },
+      "notes": "RAG retrieval (Chroma) of Regulation 14 §1, Regulation 2 §16(b) and Regulation 9 §2 clause text, used to ground the AI notice-parser and the later EDD memo drafting node."
+    },
+    {
+      "id": "b9458cf7-abdb-4aef-a94d-e0c7e54a8a7e",
+      "name": "AI Parse Regulatory Notice",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        580,
+        260
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"model\": \"llama-3.3-70b-versatile\", \"messages\": [ {\"role\": \"system\", \"content\": \"You are an expert SBP Regulatory Analyst. Extract the country and SBP risk classification (high_risk / monitored / normal) strictly from the notice text, grounded only in the retrieved regulation clause. Respond ONLY as JSON: {\\\"country\\\":..,\\\"risk_tier\\\":..}\"}, {\"role\": \"user\", \"content\": \"Notice: \" + $json.notice_text + \"\\nRegulation Context: \" + $node[\"Query Vector Store - Reg14\"].json.documents[0].join(\" \") } ], \"temperature\": 0 } }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Groq API Key"
+        }
+      },
+      "notes": "Maps informal FATF/SBP language to the workflow's fixed risk_tier vocabulary (high_risk/monitored/normal). Uses Groq Header Auth credential named 'Groq API Key' — same credential used in UC10."
+    },
+    {
+      "id": "a5007f8c-f0cb-4fb7-9487-5f9d79f7e9b4",
+      "name": "Normalize AI Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        840,
+        260
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "event_type",
+              "value": "LIST_UPDATE",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "country",
+              "value": "={{$json.choices[0].message.content ? JSON.parse($json.choices[0].message.content).country : \"\"}}",
+              "type": "string"
+            },
+            {
+              "id": "a3",
+              "name": "risk_tier",
+              "value": "={{$json.choices[0].message.content ? JSON.parse($json.choices[0].message.content).risk_tier : \"\"}}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "notes": "Reshapes the AI's structured extraction into the same event schema used by manually-submitted LIST_UPDATE events, so downstream nodes need no special-casing."
+    },
+    {
+      "id": "97b5ce82-bd74-4c80-befe-def8e53d40e7",
+      "name": "Switch Event Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1100,
+        400
+      ],
+      "parameters": {
+        "mode": "expression",
+        "output": "={{$json.event_type}}",
+        "rules": {
+          "rules": [
+            {
+              "outputKey": "TRANSACTION",
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.event_type}}",
+                    "rightValue": "TRANSACTION",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "outputKey": "LIST_UPDATE",
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.event_type}}",
+                    "rightValue": "LIST_UPDATE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "none"
+        }
+      },
+      "notes": "Routes cross-border transaction screening events on Route A, and jurisdiction_list designation changes (whether originally structured or AI-normalized above) on Route B."
+    },
+    {
+      "id": "ccc94b0d-46f5-40d5-8ddf-63b0d9515cc3",
+      "name": "Fetch Customer & Txn Geo-Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1380,
+        100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT c.customer_id, c.full_name, c.country, t.transaction_id, t.counterparty_name, t.counterparty_country, t.amount FROM customers c LEFT JOIN accounts a ON a.customer_id = c.customer_id LEFT JOIN transactions t ON t.account_id = a.account_id AND t.transaction_id = {{$json.transaction_id}} WHERE c.customer_id = {{$json.customer_id}};"
+      },
+      "notes": "Reg 9 \u00a71(a)(i): gathers geographic presence/jurisdiction of both the customer and the transaction counterparty for suitability assessment."
+    },
+    {
+      "id": "8301ad17-e3f2-447c-a075-6c899f12919d",
+      "name": "IF Country Missing",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1640,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{$json.country || $json.counterparty_country}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "notes": "Error handling rule: a null country is NEVER auto-classified as low-risk. It is routed to a manual queue instead."
+    },
+    {
+      "id": "20ed82b1-7a22-476a-8e74-426974281a38",
+      "name": "Insert COUNTRY_MISSING Alert",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1900,
+        -40
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alerts (related_table, related_id, alert_type, severity, status) VALUES ('customers', {{$json.customer_id}}, 'COUNTRY_MISSING', 'medium', 'open');"
+      },
+      "notes": "Manual-queue exit for records with missing geography data; requires analyst data-quality remediation before screening can complete."
+    },
+    {
+      "id": "701aecbb-19a1-4744-8bba-35bf7abaed9b",
+      "name": "Manual Data-Quality Queue",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2160,
+        -40
+      ],
+      "parameters": {},
+      "notes": "Ends this execution branch; case reappears once the analyst backfills country data and resubmits the event."
+    },
+    {
+      "id": "1f69366a-f6c8-4b03-9d46-566df747e4f7",
+      "name": "Lookup Risk Tier",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1900,
+        100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT risk_tier, counter_measure FROM jurisdiction_list WHERE country_name = '{{$json.counterparty_country || $json.country}}';"
+      },
+      "notes": "Reg 14 \u00a71: checks the country's current SBP/FATF-sourced designation. This lookup table is the deterministic source of truth \u2014 never inferred by a model."
+    },
+    {
+      "id": "bca85938-887c-484b-b9c0-1bd895a46cc5",
+      "name": "Switch Risk Tier",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        2160,
+        100
+      ],
+      "parameters": {
+        "mode": "expression",
+        "output": "={{$json.risk_tier}}",
+        "rules": {
+          "rules": [
+            {
+              "outputKey": "high_risk",
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.risk_tier}}",
+                    "rightValue": "high_risk",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "outputKey": "monitored",
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.risk_tier}}",
+                    "rightValue": "monitored",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "outputKey": "normal",
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.risk_tier}}",
+                    "rightValue": "normal",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "notes": "Reg 14 \u00a71 / Reg 2 \u00a716(b) / Reg 9 \u00a72 branch: high_risk -> full counter-measures, monitored -> enhanced monitoring only, normal -> no action."
+    },
+    {
+      "id": "c3d6f8fa-4223-443d-96d9-584f0a2f3bd7",
+      "name": "Set Monitor Flag",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2420,
+        220
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "m1",
+              "name": "escalate_risk",
+              "value": "medium",
+              "type": "string"
+            },
+            {
+              "id": "m2",
+              "name": "apply_edd",
+              "value": false,
+              "type": "boolean"
+            }
+          ]
+        }
+      },
+      "notes": "Monitored-tier countries get enhanced ongoing monitoring per Reg 1 \u00a721 without triggering full EDD or transaction hold."
+    },
+    {
+      "id": "81bc0a0a-fabe-4afe-b938-d9c0474a26a1",
+      "name": "Insert MONITORED Alert",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2680,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alerts (related_table, related_id, alert_type, severity, status) VALUES ('customers', {{$node[\"Fetch Customer & Txn Geo-Data\"].json.customer_id}}, 'JURISDICTION_RISK', 'low', 'open');"
+      },
+      "notes": "Low-severity monitoring alert; does not block the transaction."
+    },
+    {
+      "id": "a62b19fa-6841-43d6-96ed-073a257c1a1c",
+      "name": "No Action - Normal Tier",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        380
+      ],
+      "parameters": {},
+      "notes": "Normal-tier jurisdiction: no counter-measure required (Reg 14 \u00a71 does not apply)."
+    },
+    {
+      "id": "b29d78e9-0923-463c-aa4f-c5f6dcb701d7",
+      "name": "Map Counter-Measure Status",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2420,
+        60
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "h1",
+              "name": "escalate_risk",
+              "value": "high",
+              "type": "string"
+            },
+            {
+              "id": "h2",
+              "name": "apply_edd",
+              "value": true,
+              "type": "boolean"
+            }
+          ]
+        }
+      },
+      "notes": "Reg 2 \u00a716(b): high-risk jurisdiction exposure mandates EDD by default."
+    },
+    {
+      "id": "79258d1f-aeb8-4879-990b-901b60cb6771",
+      "name": "Elevate Customer Risk Profile",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2680,
+        60
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO risk_profiles (customer_id, risk_rating, rating_basis) VALUES ({{$node[\"Fetch Customer & Txn Geo-Data\"].json.customer_id}}, 'high', 'High-Risk Jurisdiction Exposure') ON CONFLICT (customer_id) DO UPDATE SET risk_rating = 'high', rating_basis = 'High-Risk Jurisdiction Exposure', last_reviewed = now();"
+      },
+      "notes": "Reg 1 \u00a76/\u00a721(a): updates the entity-level Customer Risk Profile (CRP) to high, feeding the ongoing-monitoring cadence."
+    },
+    {
+      "id": "30a75b7e-e271-4a57-ab37-c1024d07c1e6",
+      "name": "Score Cross-Border Exposure (ML)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2940,
+        60
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://ml-service:5001/api/score-jurisdiction-exposure",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"customer_country\": $node[\"Fetch Customer & Txn Geo-Data\"].json.country, \"counterparty_country\": $node[\"Fetch Customer & Txn Geo-Data\"].json.counterparty_country, \"amount\": $node[\"Fetch Customer & Txn Geo-Data\"].json.amount, \"corridor_history\": true } }}",
+        "options": {}
+      },
+      "notes": "Calibrated gradient-boosted classifier scoring INDIRECT exposure (routing/correspondent chains, layered counterparties) that a flat country-match rule would miss. Decision cutoff is derived from the model's precision-recall curve (documented model card), not a guessed number. The classifier only feeds the routing decision below \u2014 it never itself freezes or rejects a transaction."
+    },
+    {
+      "id": "bdbaa1f6-9caa-47db-babb-401cc08a0a04",
+      "name": "IF Exposure Score >= Hold Threshold",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3200,
+        60
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "e1",
+              "leftValue": "={{$json.exposure_score}}",
+              "rightValue": "={{$json.calibrated_hold_cutoff}}",
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "notes": "Deterministic gate applied AFTER the model score: crossing the calibrated cutoff routes to mandatory compliance sign-off; below it, EDD is applied but the transaction is not held."
+    },
+    {
+      "id": "333f2247-6cf4-4b0c-8c2a-9c02377c9846",
+      "name": "Pause for Compliance Approval",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3460,
+        -80
+      ],
+      "parameters": {
+        "resume": "webhook",
+        "webhookOptions": {
+          "httpMethod": "POST",
+          "path": "jurisdiction-risk-approval"
+        }
+      },
+      "notes": "Reg 2 \u00a716(f)/\u00a717(f) and Reg 9 \u00a71(c): a high-risk cross-border transaction hold requires senior-management/compliance sign-off before continuation. Workflow suspends and resumes on the compliance officer's decision webhook."
+    },
+    {
+      "id": "5c9d045f-ef70-4255-a47f-0a3ce23bb482",
+      "name": "IF Approved",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3720,
+        -80
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "ap1",
+              "leftValue": "={{$json.approved}}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "notes": "Records the compliance officer's decision on whether to hold/reject the transaction or release it under EDD conditions."
+    },
+    {
+      "id": "5be5ba9c-6b81-4e2a-89ca-c776df0f6a20",
+      "name": "Update Transaction - Hold/Reject",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3980,
+        -180
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE wire_transfers SET status = 'hold' WHERE wire_id = {{$node[\"Fetch Customer & Txn Geo-Data\"].json.transaction_id}};"
+      },
+      "notes": "Applies the confirmed counter-measure: transaction placed on hold pending EDD completion, or rejected outright per the jurisdiction's counter_measure value."
+    },
+    {
+      "id": "bef307c3-8244-41e8-8f3d-a061e12a3f2f",
+      "name": "Release Under EDD Conditions",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3980,
+        20
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "r1",
+              "name": "release_status",
+              "value": "released_with_edd",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "notes": "Compliance officer overrides the automatic hold after confirming EDD (source of funds/wealth, purpose) satisfies Reg 2 \u00a717."
+    },
+    {
+      "id": "49d2261b-b2a4-4e51-9d0b-1973524567ce",
+      "name": "Apply EDD Flag Only",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3460,
+        160
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d1",
+              "name": "edd_required",
+              "value": true,
+              "type": "boolean"
+            }
+          ]
+        }
+      },
+      "notes": "Below the hold cutoff: EDD measures (Reg 2 \u00a717) apply but the transaction itself proceeds without a manual hold."
+    },
+    {
+      "id": "75d3a703-1d55-4892-b083-9149bf574063",
+      "name": "Insert JURISDICTION_RISK Alert",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        4240,
+        -80
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alerts (related_table, related_id, alert_type, severity, status) VALUES ('customers', {{$node[\"Fetch Customer & Txn Geo-Data\"].json.customer_id}}, 'JURISDICTION_RISK', 'high', 'open') RETURNING alert_id;"
+      },
+      "notes": "Persists the high-risk jurisdiction alert regardless of the hold/release outcome, for SBP inspection trail purposes."
+    },
+    {
+      "id": "3ca75725-0a5a-4ae2-a1ff-3449f84eac06",
+      "name": "Query Vector Store - EDD Memo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4500,
+        -80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://rag-service:8000/api/v1/collections/sbp_regulations/query",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"query_texts\": [\"enhanced due diligence high risk jurisdiction correspondent banking\"], \"n_results\": 3, \"where\": {\"regulation\": {\"$in\": [\"Reg 14\", \"Reg 2\", \"Reg 9\"]}} } }}",
+        "options": {}
+      },
+      "notes": "RAG retrieval grounding the EDD memo strictly in Reg 14 §1, Reg 2 §16(b)/§17 and Reg 9 §2 clause text."
+    },
+    {
+      "id": "243ae44c-07db-48a9-8d32-b5b3e07e1b4a",
+      "name": "AI Draft EDD Memo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4760,
+        -80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"model\": \"llama-3.3-70b-versatile\", \"messages\": [ {\"role\": \"system\", \"content\": \"Draft a concise EDD case memo. Cite ONLY the retrieved regulation clause text verbatim by reference (e.g. 'per Regulation 14 §1'); never invent a citation.\"}, {\"role\": \"user\", \"content\": \"Customer: \" + $node[\"Fetch Customer & Txn Geo-Data\"].json.full_name + \". Counterparty country: \" + $node[\"Fetch Customer & Txn Geo-Data\"].json.counterparty_country + \". Regulation context: \" + $node[\"Query Vector Store - EDD Memo\"].json.documents[0].join(\" \") } ], \"temperature\": 0.2 } }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Groq API Key"
+        }
+      },
+      "notes": "Produces a citable, audit-defensible EDD case memo for the compliance file - grounded only in retrieved clause text, never freeform. Uses Groq Header Auth credential named 'Groq API Key'."
+    },
+    {
+      "id": "5b645a3f-5453-44ed-87f6-fb6b0b3f0c90",
+      "name": "Update Jurisdiction List",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1380,
+        620
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO jurisdiction_list (country_name, risk_tier, counter_measure) VALUES ('{{$json.country}}', '{{$json.risk_tier}}', CASE WHEN '{{$json.risk_tier}}' = 'high_risk' THEN 'EDD Required' WHEN '{{$json.risk_tier}}' = 'monitored' THEN 'Enhanced Monitoring' ELSE NULL END) ON CONFLICT (country_name) DO UPDATE SET risk_tier = '{{$json.risk_tier}}', counter_measure = EXCLUDED.counter_measure, updated_at = now() RETURNING jurisdiction_id;"
+      },
+      "notes": "Reg 14 \u00a71: versioned upsert of the SBP/FATF-sourced country designation that drives all downstream counter-measures."
+    },
+    {
+      "id": "37d8bf4a-0f87-4e2d-84ff-8a84d9f61126",
+      "name": "Fetch Impacted Customers",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1640,
+        620
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT customer_id FROM customers WHERE country = '{{$node[\"Update Jurisdiction List\"].json.country_name || $json.country}}';"
+      },
+      "notes": "Identifies every existing customer relationship linked to the newly re-designated country, for mandatory re-screening (Reg 1 \u00a721(a))."
+    },
+    {
+      "id": "83563873-662c-47ae-95ed-0e82d09ef4c3",
+      "name": "Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1900,
+        620
+      ],
+      "parameters": {
+        "batchSize": 50,
+        "options": {}
+      },
+      "notes": "Batch size capped at 50 to prevent Postgres row-lock contention in the sandbox when a country re-designation affects a large customer base."
+    },
+    {
+      "id": "15f65966-74cc-4ca9-8501-5bfa083984ce",
+      "name": "Elevate Profile Risk (Batch)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2160,
+        560
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO risk_profiles (customer_id, risk_rating, rating_basis) VALUES ({{$json.customer_id}}, 'high', 'High-Risk Jurisdiction Re-Designation') ON CONFLICT (customer_id) DO UPDATE SET risk_rating = 'high', rating_basis = 'High-Risk Jurisdiction Re-Designation', last_reviewed = now();"
+      },
+      "notes": "Applies the same CRP elevation as the real-time transaction path, to every impacted existing customer."
+    },
+    {
+      "id": "b7247a09-08fb-4e42-b9d1-23c42ead5df7",
+      "name": "Insert Alert Per Customer",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2420,
+        560
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alerts (related_table, related_id, alert_type, severity, status) VALUES ('customers', {{$json.customer_id}}, 'JURISDICTION_RISK', 'high', 'open');"
+      },
+      "notes": "One alert row per impacted customer, closing the loop back to Split In Batches until all pages are processed."
+    },
+    {
+      "id": "06cb6fb1-8375-4d28-91ef-3eb81df57a47",
+      "name": "Merge Branches",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.1,
+      "position": [
+        5020,
+        300
+      ],
+      "parameters": {
+        "mode": "chooseBranch",
+        "output": "input1"
+      },
+      "notes": "Reconciles Route A (transaction screening) and Route B (batch re-screening) into a single downstream path for dashboard refresh, notification and audit logging."
+    },
+    {
+      "id": "fa9f6494-8be2-40c6-aab3-e3f85d17d6b9",
+      "name": "Refresh Exposure Dashboard",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        5280,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE alerts SET status = 'processed' WHERE alert_type = 'JURISDICTION_RISK' AND status = 'open';"
+      },
+      "notes": "Refreshes the consolidated SBP-sandbox geo-exposure view consumed by the compliance dashboard."
+    },
+    {
+      "id": "90e1d675-7637-4cce-8824-d51dbc3bf25f",
+      "name": "Notify Slack - Georisk Alerts",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        5540,
+        180
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "#georisk-alerts",
+        "text": "=EXPOSURE WARN: {{$json.country}} elevated to {{$json.risk_tier}}. Cross-border counter-measures applied."
+      },
+      "notes": "Real-time notification to the compliance team's monitoring channel."
+    },
+    {
+      "id": "1320a742-26ad-44f9-9963-af493e695dfc",
+      "name": "Email Branch Managers",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        5540,
+        420
+      ],
+      "parameters": {
+        "fromEmail": "aml-system@bank.sandbox",
+        "toEmail": "branch-managers@bank.sandbox",
+        "subject": "=New EDD Requirement: {{$json.country}}",
+        "text": "=Effective immediately, all relationships linked to {{$json.country}} require Enhanced Due Diligence per Regulation 14 \u00a71 and Regulation 2 \u00a716(b) of the SBP AML/CFT/CPF Regulations."
+      },
+      "notes": "Reg 2 \u00a716: operational notice so branch staff apply EDD at next customer contact."
+    },
+    {
+      "id": "10d28c11-6610-4f4e-8725-00faf9e258ad",
+      "name": "Write System Audit Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        5800,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_logs (workflow_name, action, actor, reference_table, reference_id, details) VALUES ('HighRisk_Jurisdiction_Countermeasures_Orchestration', 'RISK_RESCREEN_COMPLETED', 'system', 'jurisdiction_list', {{$json.jurisdiction_id || 0}}, '{{$json.toJsonString ? $json.toJsonString() : JSON.stringify($json)}}'::jsonb);"
+      },
+      "notes": "Reg 8 (Record Keeping): immutable ledger entry, retained per the 10-year record-keeping rule."
+    }
+  ],
+  "connections": {
+    "Event Trigger": {
+      "main": [
+        [
+          {
+            "node": "IF Unstructured Notice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Unstructured Notice": {
+      "main": [
+        [
+          {
+            "node": "Query Vector Store - Reg14",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Switch Event Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Vector Store - Reg14": {
+      "main": [
+        [
+          {
+            "node": "AI Parse Regulatory Notice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Parse Regulatory Notice": {
+      "main": [
+        [
+          {
+            "node": "Normalize AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize AI Output": {
+      "main": [
+        [
+          {
+            "node": "Switch Event Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch Event Route": {
+      "main": [
+        [
+          {
+            "node": "Fetch Customer & Txn Geo-Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Jurisdiction List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Customer & Txn Geo-Data": {
+      "main": [
+        [
+          {
+            "node": "IF Country Missing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Country Missing": {
+      "main": [
+        [
+          {
+            "node": "Insert COUNTRY_MISSING Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Lookup Risk Tier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert COUNTRY_MISSING Alert": {
+      "main": [
+        [
+          {
+            "node": "Manual Data-Quality Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Risk Tier": {
+      "main": [
+        [
+          {
+            "node": "Switch Risk Tier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch Risk Tier": {
+      "main": [
+        [
+          {
+            "node": "Map Counter-Measure Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Monitor Flag",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Action - Normal Tier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Monitor Flag": {
+      "main": [
+        [
+          {
+            "node": "Insert MONITORED Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert MONITORED Alert": {
+      "main": [
+        [
+          {
+            "node": "Merge Branches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Action - Normal Tier": {
+      "main": [
+        [
+          {
+            "node": "Merge Branches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Counter-Measure Status": {
+      "main": [
+        [
+          {
+            "node": "Elevate Customer Risk Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Elevate Customer Risk Profile": {
+      "main": [
+        [
+          {
+            "node": "Score Cross-Border Exposure (ML)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score Cross-Border Exposure (ML)": {
+      "main": [
+        [
+          {
+            "node": "IF Exposure Score >= Hold Threshold",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Exposure Score >= Hold Threshold": {
+      "main": [
+        [
+          {
+            "node": "Pause for Compliance Approval",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Apply EDD Flag Only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pause for Compliance Approval": {
+      "main": [
+        [
+          {
+            "node": "IF Approved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Approved": {
+      "main": [
+        [
+          {
+            "node": "Update Transaction - Hold/Reject",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Release Under EDD Conditions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Transaction - Hold/Reject": {
+      "main": [
+        [
+          {
+            "node": "Insert JURISDICTION_RISK Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release Under EDD Conditions": {
+      "main": [
+        [
+          {
+            "node": "Insert JURISDICTION_RISK Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply EDD Flag Only": {
+      "main": [
+        [
+          {
+            "node": "Insert JURISDICTION_RISK Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert JURISDICTION_RISK Alert": {
+      "main": [
+        [
+          {
+            "node": "Query Vector Store - EDD Memo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Vector Store - EDD Memo": {
+      "main": [
+        [
+          {
+            "node": "AI Draft EDD Memo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Draft EDD Memo": {
+      "main": [
+        [
+          {
+            "node": "Merge Branches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Jurisdiction List": {
+      "main": [
+        [
+          {
+            "node": "Fetch Impacted Customers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Impacted Customers": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split In Batches": {
+      "main": [
+        [
+          {
+            "node": "Elevate Profile Risk (Batch)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge Branches",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Elevate Profile Risk (Batch)": {
+      "main": [
+        [
+          {
+            "node": "Insert Alert Per Customer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Alert Per Customer": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Branches": {
+      "main": [
+        [
+          {
+            "node": "Refresh Exposure Dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Refresh Exposure Dashboard": {
+      "main": [
+        [
+          {
+            "node": "Notify Slack - Georisk Alerts",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email Branch Managers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Slack - Georisk Alerts": {
+      "main": [
+        [
+          {
+            "node": "Write System Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Branch Managers": {
+      "main": [
+        [
+          {
+            "node": "Write System Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "sbp-sandbox-uc11-highrisk-jurisdiction"
+  },
+  "id": "uc11-highrisk-jurisdiction-countermeasures",
+  "tags": [
+    {
+      "name": "SBP-AML-FYP"
+    },
+    {
+      "name": "UC11"
+    },
+    {
+      "name": "Regulation-14"
+    }
+  ]
+}

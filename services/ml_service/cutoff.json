@@ -1,0 +1,16 @@
+{
+  "calibrated_hold_cutoff": 0.7934,
+  "target_min_recall": 0.85,
+  "test_auc": 0.9688,
+  "precision_at_cutoff": 0.9516,
+  "recall_at_cutoff": 0.8531,
+  "feature_order": [
+    "customer_high_risk",
+    "customer_monitored",
+    "counterparty_high_risk",
+    "counterparty_monitored",
+    "log_amount",
+    "corridor_history",
+    "hops"
+  ]
+}
