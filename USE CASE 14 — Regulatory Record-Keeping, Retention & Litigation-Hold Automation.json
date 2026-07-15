@@ -1,0 +1,919 @@
+{
+  "name": "USE CASE 14 — Regulatory Record-Keeping, Retention & Litigation-Hold Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "retention-gateway",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Retention Gateway",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        48,
+        368
+      ],
+      "id": "75f1d3c7-382e-4eff-aed9-77cd15a2a91e",
+      "webhookId": "a3e5a483-7912-435b-b2e9-36e2e7b7afb9",
+      "notes": "Single entry point. Expects JSON body: { event_type: RECORD_CREATED | LITIGATION_HOLD | LEA_INQUIRY | RELEASE_HOLD, ...fields }"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.body.event_type }}",
+                    "rightValue": "RECORD_CREATED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.body.event_type }}",
+                    "rightValue": "LITIGATION_HOLD",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.body.event_type }}",
+                    "rightValue": "LEA_INQUIRY",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.body.event_type }}",
+                    "rightValue": "RELEASE_HOLD",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "name": "Route Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        288,
+        368
+      ],
+      "id": "88f9fb7d-3cc8-43d1-9d6e-6d3881255342",
+      "notes": "Regulation 8 governs all 4 branches. Route 1=tag new record (§2-3), Route 2=impose hold (§5), Route 3=LEA reconstruction request (§4,§6), Route 4=lift hold once litigation resolved (§5)."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO documents (related_table, related_id, document_type, retention_start, retention_years, litigation_hold) VALUES ('{{ $json.body.related_table }}', {{ $json.body.related_id }}, '{{ $json.body.doc_type }}', CURRENT_DATE, 10, FALSE) RETURNING document_id;",
+        "options": {}
+      },
+      "name": "Tag Document Retention",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        576,
+        0
+      ],
+      "id": "ef320625-e0ca-4f86-a6d4-b2b7bc76f6fd",
+      "credentials": {
+        "postgres": {
+          "id": "TrNga3PrEIGYtPdb",
+          "name": "Postgres account"
+        }
+      },
+      "notes": "Reg 8 §2-3: default 10-year retention clock starts here."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"tagged\", \"document_id\": $json.document_id, \"retention_years\": 10 } }}",
+        "options": {}
+      },
+      "name": "Respond Record Tagged",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        816,
+        0
+      ],
+      "id": "31eb983a-d1d1-40b4-8878-008be7493df1"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE documents SET litigation_hold = TRUE WHERE related_table = 'accounts' AND related_id = (SELECT account_id FROM accounts WHERE account_number = '{{ $json.body.account_number }}') RETURNING document_id;",
+        "options": {}
+      },
+      "name": "Apply Litigation Hold",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        576,
+        208
+      ],
+      "id": "80be1a6a-3f75-4fb7-9548-5d5bccafea5c",
+      "credentials": {
+        "postgres": {
+          "id": "TrNga3PrEIGYtPdb",
+          "name": "Postgres account"
+        }
+      },
+      "notes": "Reg 8 §5: hold overrides the standard retention clock."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_logs (workflow_name, action, actor, reference_table, reference_id, details) VALUES ('Record_Retention', 'LITIGATION_HOLD_APPLIED', 'legal_officer', 'documents', {{ $json.document_id }}, '{\"order_ref\": \"{{ $(\"Retention Gateway\").item.json.body.order_reference }}\", \"account_number\": \"{{ $(\"Retention Gateway\").item.json.body.account_number }}\"}'::jsonb);",
+        "options": {}
+      },
+      "name": "Log Hold Applied",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        816,
+        208
+      ],
+      "id": "971442a2-55a1-4beb-876e-eff035052749",
+      "credentials": {
+        "postgres": {
+          "id": "TrNga3PrEIGYtPdb",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0BGZFBQ3M5",
+          "mode": "list",
+          "cachedResultName": "all-sbp-compliance"
+        },
+        "text": "=ALERT [HOLD APPLIED]: Account {{ $(\"Retention Gateway\").item.json.body.account_number }} placed under litigation hold. Retention scans deactivated for related documents.",
+        "otherOptions": {}
+      },
+      "name": "Notify Legal Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        1056,
+        208
+      ],
+      "id": "1975d049-6dea-40f1-a4a3-9b18c00213c2",
+      "webhookId": "cba5019f-89de-4917-a27f-1a15e3a84e82",
+      "credentials": {
+        "slackApi": {
+          "id": "pQYAvQSfOSM2OSRW",
+          "name": "Slack account"
+        }
+      },
+      "notes": "Optional - swap credential/channel or remove if Slack isn't wired up in the sandbox."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"hold_applied\", \"document_id\": $json.document_id } }}",
+        "options": {}
+      },
+      "name": "Respond Hold Applied",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1296,
+        208
+      ],
+      "id": "a37c49e4-c6fe-4aff-bea1-b617b92470b1"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT t.transaction_id, t.amount, t.currency, t.txn_type, t.txn_date, a.account_number FROM transactions t JOIN accounts a ON t.account_id = a.account_id WHERE a.account_number = '{{ $json.body.account_number }}' AND t.txn_date BETWEEN '{{ $json.body.start_date }}' AND '{{ $json.body.end_date }}';",
+        "options": {}
+      },
+      "name": "Search Transactions",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        576,
+        448
+      ],
+      "id": "04bc7755-b0f0-42bd-b364-96b03a6007ed",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "TrNga3PrEIGYtPdb",
+          "name": "Postgres account"
+        }
+      },
+      "notes": "Reg 8 §4: pulls the exact fields the regulation requires for reconstruction (date, amount, currency, account, nature of txn)."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ml-api:5000/api/vector-db/query",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"query\": \"transaction record reconstruction evidence retention\", \"top_k\": 1 } }}",
+        "options": {}
+      },
+      "name": "Retrieve Reg8 Clause (RAG)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        816,
+        448
+      ],
+      "id": "bdd10f41-1124-41c0-b9c2-b9811c4ab2e8",
+      "notes": "Grounds the LLM in the actual regulation text instead of letting it invent citations. Points at a local Chroma REST endpoint - swap for your own vector store URL."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"model\": \"llama-3.3-70b-versatile\",\n  \"temperature\": 0.1,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a bank General Counsel drafting a transaction reconstruction cover note for a law enforcement request. Only state facts present in the supplied data and the supplied regulatory clause. Do not invent figures, dates, or citations. If a required field is missing, say so explicitly instead of guessing.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": (\n        \"Compile a short reconstruction bundle cover note for account \" + $(\"Retention Gateway\").item.json.body.account_number +\n        \", covering \" + $(\"Retention Gateway\").item.json.body.start_date + \" to \" + $(\"Retention Gateway\").item.json.body.end_date +\n        \".\\n\\nRegulatory clause to cite (from RAG retrieval):\\n\" + $json.clause +\n        \"\\n\\nTransaction records to certify:\\n\" + JSON.stringify($(\"Search Transactions\").all().map(i => i.json)) +\n        \"\\n\\nConfirm which of the four mandated fields (date, currency+amount, nature/type, account identifier) are present for each record, and note any that are missing.\"\n      )\n    }\n  ]\n} }}",
+        "options": {}
+      },
+      "name": "AI Compile Cover Note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1056,
+        448
+      ],
+      "id": "03062a2f-254b-451d-9b03-dc7def4a865e",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "7en4gTUrMPAy27zp",
+          "name": "Header Auth account"
+        }
+      },
+      "notes": "Calls Groq's OpenAI-compatible chat completions endpoint directly via HTTP Request (n8n has no native Groq node). Create an 'Header Auth' credential named e.g. 'Groq API Key' with header 'Authorization: Bearer <your_groq_api_key>' and attach it here. Single, narrow, low-temperature call - drafting text only, grounded in the RAG clause + real DB rows. It never decides whether to freeze/deliver/hold; that stays in Postgres/IF logic."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "account_number",
+              "value": "={{ $(\"Retention Gateway\").item.json.body.account_number }}",
+              "type": "string"
+            },
+            {
+              "name": "start_date",
+              "value": "={{ $(\"Retention Gateway\").item.json.body.start_date }}",
+              "type": "string"
+            },
+            {
+              "name": "end_date",
+              "value": "={{ $(\"Retention Gateway\").item.json.body.end_date }}",
+              "type": "string"
+            },
+            {
+              "name": "cover_note",
+              "value": "={{ $json.choices[0].message.content }}",
+              "type": "string"
+            },
+            {
+              "name": "records",
+              "value": "={{ JSON.stringify($(\"Search Transactions\").all().map(i => i.json)) }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Package Reconstruction Bundle",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1296,
+        448
+      ],
+      "id": "b97d2752-259c-40ff-8530-d99dfa9bb817"
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Wait For Legal Approval",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1536,
+        448
+      ],
+      "id": "01765e37-5189-4277-b132-aa2cd84b72c6",
+      "webhookId": "37e0648d-25f5-4a12-a433-9a036cbd6760",
+      "notes": "Reg 8 §6: bundle must be reviewed by a human (Legal Counsel/Compliance Officer) before release to an external authority. Resume URL is sent to legal via the notification below; call it with { \"approved\": true|false }."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.body.approved }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              },
+              "id": "36a30447-5b06-4292-ab4e-1c97aae6ba58"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1776,
+        448
+      ],
+      "id": "78f0862b-72bd-470c-aba2-30a4d2a9075a"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ml-api:5000/mock-lea/receive-bundle",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $(\"Package Reconstruction Bundle\").item.json }}",
+        "options": {}
+      },
+      "name": "Deliver Bundle To LEA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2016,
+        368
+      ],
+      "id": "7c17aa00-0885-459f-af31-ca4c3815dfbc",
+      "notes": "Mock endpoint - swap for the real LEA/FIA intake system when moving beyond synthetic data."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_logs (workflow_name, action, actor, reference_table, reference_id, details) VALUES ('Record_Retention', 'LEA_INQUIRY_SERVED', 'legal_officer', 'accounts', (SELECT account_id FROM accounts WHERE account_number = '{{ $(\"Package Reconstruction Bundle\").item.json.account_number }}'), '{\"receipt\": \"{{ $json.receipt }}\"}'::jsonb);",
+        "options": {}
+      },
+      "name": "Log Inquiry Served",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2256,
+        368
+      ],
+      "id": "1782b31e-a0f7-4432-bbd1-61d40d8c64ac",
+      "credentials": {
+        "postgres": {
+          "id": "TrNga3PrEIGYtPdb",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"delivered\", \"receipt\": $(\"Deliver Bundle To LEA\").item.json.receipt } }}",
+        "options": {}
+      },
+      "name": "Respond Bundle Delivered",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2496,
+        368
+      ],
+      "id": "33a4d35e-16a5-439d-a455-b37116cc6650"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"rejected_by_legal\" } }}",
+        "options": {}
+      },
+      "name": "Respond Approval Rejected",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2016,
+        592
+      ],
+      "id": "6e28300d-817a-46af-81e5-b413f510acca"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE documents SET litigation_hold = FALSE WHERE related_table = 'accounts' AND related_id = (SELECT account_id FROM accounts WHERE account_number = '{{ $json.body.account_number }}') RETURNING document_id;",
+        "options": {}
+      },
+      "name": "Lift Litigation Hold",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        576,
+        672
+      ],
+      "id": "0505469a-09d1-4677-b4e0-3c23b83c118b",
+      "credentials": {
+        "postgres": {
+          "id": "TrNga3PrEIGYtPdb",
+          "name": "Postgres account"
+        }
+      },
+      "notes": "Reg 8 §5: once litigation is resolved, the standard 10-year retention clock resumes governing the record."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_logs (workflow_name, action, actor, reference_table, reference_id, details) VALUES ('Record_Retention', 'LITIGATION_HOLD_RELEASED', 'legal_officer', 'documents', {{ $json.document_id }}, '{}'::jsonb);",
+        "options": {}
+      },
+      "name": "Log Hold Released",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        816,
+        672
+      ],
+      "id": "6d117321-c868-4588-9b35-8d42e47ce2d0",
+      "credentials": {
+        "postgres": {
+          "id": "TrNga3PrEIGYtPdb",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"hold_released\", \"document_id\": $json.document_id } }}",
+        "options": {}
+      },
+      "name": "Respond Hold Released",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1056,
+        672
+      ],
+      "id": "f5dabb0a-dd11-4e52-8803-e7b19aff5d14"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"error\", \"message\": \"Unrecognized event_type. Expected RECORD_CREATED, LITIGATION_HOLD, LEA_INQUIRY, or RELEASE_HOLD.\" } }}",
+        "options": {}
+      },
+      "name": "Respond Invalid Event",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        576,
+        880
+      ],
+      "id": "4a0b8a2d-bccc-402f-b017-169a97b5c0ac"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Nightly Retention Scan",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        48,
+        1040
+      ],
+      "id": "5e643b95-6d00-4b4a-a8bc-efb8d7610e53",
+      "notes": "Runs once daily. Deterministic date-math only - no model involved, per Reg 8 §2-3/§5."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT document_id, related_table, related_id FROM documents WHERE (retention_start + (retention_years || ' years')::interval) <= now() AND litigation_hold = FALSE;",
+        "options": {}
+      },
+      "name": "Find Expired Records",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        288,
+        1040
+      ],
+      "id": "f6a628bf-e67d-419d-8b88-61cdd7754bc9",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "TrNga3PrEIGYtPdb",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alerts (related_table, related_id, alert_type, severity, status) SELECT related_table, related_id, 'RETENTION_REVIEW', 'low', 'open' FROM documents WHERE (retention_start + (retention_years || ' years')::interval) <= now() AND litigation_hold = FALSE RETURNING alert_id;",
+        "options": {}
+      },
+      "name": "Flag Retention Alerts",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        544,
+        1040
+      ],
+      "id": "0e7f4fbb-3194-4efd-b549-17b1a99f28e2",
+      "credentials": {
+        "postgres": {
+          "id": "TrNga3PrEIGYtPdb",
+          "name": "Postgres account"
+        }
+      },
+      "notes": "Left as a plain SQL set operation instead of looping per-row - deliberately not over-engineered for synthetic data volumes."
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0BGZFBQ3M5",
+          "mode": "list",
+          "cachedResultName": "all-sbp-compliance"
+        },
+        "text": "=Nightly retention scan flagged {{ $json.length || 0 }} record(s) as eligible for archival review (10-year clock elapsed, no active litigation hold).",
+        "otherOptions": {}
+      },
+      "name": "Notify Compliance Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        800,
+        1040
+      ],
+      "id": "1b4d2925-a0f1-4934-8cda-e0fc90591419",
+      "webhookId": "f1b21982-9525-49aa-be7f-beda054482f5",
+      "credentials": {
+        "slackApi": {
+          "id": "pQYAvQSfOSM2OSRW",
+          "name": "Slack account"
+        }
+      },
+      "notes": "Optional - remove if Slack isn't wired up in the sandbox."
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Retention Gateway": {
+      "main": [
+        [
+          {
+            "node": "Route Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Action": {
+      "main": [
+        [
+          {
+            "node": "Tag Document Retention",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Apply Litigation Hold",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Search Transactions",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Lift Litigation Hold",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Invalid Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tag Document Retention": {
+      "main": [
+        [
+          {
+            "node": "Respond Record Tagged",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Litigation Hold": {
+      "main": [
+        [
+          {
+            "node": "Log Hold Applied",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Hold Applied": {
+      "main": [
+        [
+          {
+            "node": "Notify Legal Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Legal Slack": {
+      "main": [
+        [
+          {
+            "node": "Respond Hold Applied",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Transactions": {
+      "main": [
+        [
+          {
+            "node": "Retrieve Reg8 Clause (RAG)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retrieve Reg8 Clause (RAG)": {
+      "main": [
+        [
+          {
+            "node": "AI Compile Cover Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Compile Cover Note": {
+      "main": [
+        [
+          {
+            "node": "Package Reconstruction Bundle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Package Reconstruction Bundle": {
+      "main": [
+        [
+          {
+            "node": "Wait For Legal Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait For Legal Approval": {
+      "main": [
+        [
+          {
+            "node": "Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approved?": {
+      "main": [
+        [
+          {
+            "node": "Deliver Bundle To LEA",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Approval Rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deliver Bundle To LEA": {
+      "main": [
+        [
+          {
+            "node": "Log Inquiry Served",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Inquiry Served": {
+      "main": [
+        [
+          {
+            "node": "Respond Bundle Delivered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lift Litigation Hold": {
+      "main": [
+        [
+          {
+            "node": "Log Hold Released",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Hold Released": {
+      "main": [
+        [
+          {
+            "node": "Respond Hold Released",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nightly Retention Scan": {
+      "main": [
+        [
+          {
+            "node": "Find Expired Records",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Expired Records": {
+      "main": [
+        [
+          {
+            "node": "Flag Retention Alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flag Retention Alerts": {
+      "main": [
+        [
+          {
+            "node": "Notify Compliance Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "1c76413f-2a4e-4a2d-a6eb-6b71d9f4311f",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "c82eb810c5f171370c0a63c83e1eaf1b085bbc7109d62b64000361c425959e78"
+  },
+  "nodeGroups": [],
+  "id": "9TxpwSRHUqNmaJFS",
+  "tags": []
+}

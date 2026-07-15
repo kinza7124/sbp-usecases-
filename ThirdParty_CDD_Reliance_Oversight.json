@@ -1,0 +1,485 @@
+{
+  "name": "ThirdParty_CDD_Reliance_Oversight (UC10)",
+  "nodes": [
+    {
+      "id": "note0",
+      "name": "Sticky Note - Purpose",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-40, 60],
+      "parameters": {
+        "content": "## UC10 — Third-Party CDD Reliance Oversight\nChecks, every quarter, whether banks we RELY ON to do customer-checks for us are still trustworthy (SBP Regulation 3). If not, it raises an alert and pauses for a human compliance decision.",
+        "height": 200,
+        "width": 340,
+        "color": 4
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "cronExpression", "expression": "0 9 1 */3 *" }
+          ]
+        }
+      },
+      "id": "n1",
+      "name": "1. Quarterly Timer",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT reliance_id, third_party_name, regulator, is_same_corporate_group, country, regulatory_status FROM reliance_arrangements;",
+        "options": {}
+      },
+      "id": "n2",
+      "name": "2. Fetch Reliance Arrangements",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [260, 300],
+      "credentials": { "postgres": { "id": "1", "name": "AML Sandbox Postgres" } }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://ml-api:5000/mock-registry/status",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "name", "value": "={{ $json.third_party_name }}" },
+            { "name": "country", "value": "={{ $json.country }}" }
+          ]
+        },
+        "options": { "timeout": 5000 }
+      },
+      "id": "n3",
+      "name": "3. Query Registry API (mock)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ml-api:5000/api/vector-db/query",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: \"third party regulated supervised CDD record keeping Regulation 3 reliance arrangement\", top_k: 1 }) }}",
+        "options": {}
+      },
+      "id": "n3b",
+      "name": "3b. Retrieve Reg 3 §5 (RAG - Chroma)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [780, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ml-api:5000/llm/classify-registry-status",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ third_party_name: $('2. Fetch Reliance Arrangements').item.json.third_party_name, disclosure_text: $('3. Query Registry API (mock)').item.json.disclosure_text, sbp_clause: $json.clause }) }}",
+        "options": { "timeout": 8000 }
+      },
+      "id": "n4",
+      "name": "4. AI Interpret Status (LLM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, 300],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            { "name": "reliance_id", "type": "number", "value": "={{ $('2. Fetch Reliance Arrangements').item.json.reliance_id }}" },
+            { "name": "third_party_name", "type": "string", "value": "={{ $('2. Fetch Reliance Arrangements').item.json.third_party_name }}" },
+            { "name": "country", "type": "string", "value": "={{ $('2. Fetch Reliance Arrangements').item.json.country }}" },
+            { "name": "is_same_corporate_group", "type": "boolean", "value": "={{ $('2. Fetch Reliance Arrangements').item.json.is_same_corporate_group }}" },
+            { "name": "status", "type": "string", "value": "={{ $json.error ? 'unknown' : ($json.regulatory_status || 'unknown') }}" },
+            { "name": "reasoning", "type": "string", "value": "={{ $json.reasoning || 'Registry API did not respond in time; defaulted to unknown per Reg 3 error-handling policy.' }}" }
+          ]
+        }
+      },
+      "id": "n4b",
+      "name": "4b. Map Registry Status",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1300, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE reliance_arrangements SET regulatory_status = '{{ $json.status }}', last_verified = now() WHERE reliance_id = {{ $json.reliance_id }};",
+        "options": {}
+      },
+      "id": "n5",
+      "name": "5. Update Reliance Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1560, 300],
+      "credentials": { "postgres": { "id": "1", "name": "AML Sandbox Postgres" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.is_same_corporate_group }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "n6",
+      "name": "6. IF Group Member? (Reg 3 §7)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1820, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT document_id FROM documents WHERE related_table = 'reliance_arrangements' AND related_id = {{ $json.reliance_id }} AND document_type = 'GROUP_AML_POLICY';",
+        "options": {}
+      },
+      "id": "n7",
+      "name": "7. Verify Group Policy",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2080, 180],
+      "credentials": { "postgres": { "id": "1", "name": "AML Sandbox Postgres" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT risk_tier FROM jurisdiction_list WHERE country_name = '{{ $('4b. Map Registry Status').item.json.country }}' UNION ALL SELECT 'high_risk' WHERE NOT EXISTS (SELECT 1 FROM jurisdiction_list WHERE country_name = '{{ $('4b. Map Registry Status').item.json.country }}') LIMIT 1;",
+        "options": {}
+      },
+      "id": "n8",
+      "name": "8. Fetch Jurisdiction Risk (Reg 3 §6 / Reg 14)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2340, 300],
+      "credentials": { "postgres": { "id": "1", "name": "AML Sandbox Postgres" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "leftValue": "={{ $('4b. Map Registry Status').item.json.status }}",
+              "rightValue": "active",
+              "operator": { "type": "string", "operation": "notEquals" }
+            },
+            {
+              "leftValue": "={{ $json.risk_tier }}",
+              "rightValue": "high_risk",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "n9",
+      "name": "9. IF Breach Detected?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2600, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alerts (related_table, related_id, alert_type, severity, status) VALUES ('reliance_arrangements', {{ $('4b. Map Registry Status').item.json.reliance_id }}, 'RELIANCE_BREACH', 'high', 'open') RETURNING alert_id;",
+        "options": {}
+      },
+      "id": "n10",
+      "name": "10. Insert Breach Alert",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2860, 180],
+      "credentials": { "postgres": { "id": "1", "name": "AML Sandbox Postgres" } }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": { "mode": "name", "value": "cdd-reliance" },
+        "text": "=ALERT [RELIANCE BREACH]: Third-party {{ $('4b. Map Registry Status').item.json.third_party_name }} failed verification (status: {{ $('4b. Map Registry Status').item.json.status }}, jurisdiction risk: {{ $('8. Fetch Jurisdiction Risk (Reg 3 §6 / Reg 14)').item.json.risk_tier }}). Review required.",
+        "otherOptions": {}
+      },
+      "id": "n10b",
+      "name": "10b. Notify #cdd-reliance (Slack)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [3120, 180],
+      "credentials": { "slackApi": { "id": "2", "name": "AML Compliance Slack" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "leftValue": "={{ $('4b. Map Registry Status').item.json.status }}",
+              "rightValue": "suspended",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "n10c",
+      "name": "10c. IF Status = Suspended?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [3380, 60]
+    },
+    {
+      "parameters": {
+        "sendTo": "head.of.compliance@bank-sandbox.local",
+        "subject": "=Suspended Third-Party Reliance: {{ $('4b. Map Registry Status').item.json.third_party_name }}",
+        "emailType": "text",
+        "text": "=Third-party {{ $('4b. Map Registry Status').item.json.third_party_name }} ({{ $('4b. Map Registry Status').item.json.country }}) has been classified SUSPENDED under Regulation 3 §5 review. A RELIANCE_BREACH alert has been logged and compliance sign-off is pending.",
+        "options": {}
+      },
+      "id": "n10d",
+      "name": "10d. Email Head of Compliance",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [3640, -60],
+      "credentials": { "smtp": { "id": "3", "name": "Compliance Mailbox SMTP" } }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": { "mode": "name", "value": "cdd-reliance-approvals" },
+        "operation": "sendAndWait",
+        "message": "=Reliance breach detected for {{ $('4b. Map Registry Status').item.json.third_party_name }} ({{ $('4b. Map Registry Status').item.json.country }}). Status: {{ $('4b. Map Registry Status').item.json.status }}. Authorize continuation of this reliance relationship?",
+        "approvalOptions": {
+          "values": { "approvalType": "double", "approveLabel": "Authorize Continuation", "disapproveLabel": "Suspend Relationship" }
+        }
+      },
+      "id": "n11",
+      "name": "11. Compliance Approval Sign-Off",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [3900, 180],
+      "credentials": { "slackApi": { "id": "2", "name": "AML Compliance Slack" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.data.approved }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "n11b",
+      "name": "11b. IF Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [4160, 180]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_logs (workflow_name, action, actor, reference_table, reference_id, details) VALUES ('ThirdParty_CDD_Reliance_Oversight', 'RELIANCE_SUSPENDED_BY_COMPLIANCE', 'compliance_officer', 'reliance_arrangements', {{ $('4b. Map Registry Status').item.json.reliance_id }}, '{}'::jsonb);",
+        "options": {}
+      },
+      "id": "n11reject",
+      "name": "Reliance Suspended - Workflow Halted",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [4420, 60],
+      "credentials": { "postgres": { "id": "1", "name": "AML Sandbox Postgres" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT document_type FROM documents WHERE related_table = 'reliance_arrangements' AND related_id = {{ $('4b. Map Registry Status').item.json.reliance_id }};",
+        "options": {}
+      },
+      "id": "n12",
+      "name": "12. Fetch Customer CDD Files",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [4420, 340],
+      "credentials": { "postgres": { "id": "1", "name": "AML Sandbox Postgres" } }
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateIndividualFields",
+        "fieldsToAggregate": {
+          "fieldToAggregate": [ { "fieldToAggregate": "document_type", "renameField": true, "outputFieldName": "documentTypes" } ]
+        },
+        "options": {}
+      },
+      "id": "n12b",
+      "name": "12b. Aggregate Document Types",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [4680, 340]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "leftValue": "={{ ['FORM_A','CNIC_COPY','KYC_SHEET'].every(t => ($json.documentTypes || []).includes(t)) }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "n13",
+      "name": "13. IF Documents Complete? (Annexure I/II)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [4940, 340]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alerts (related_table, related_id, alert_type, severity, status) VALUES ('reliance_arrangements', {{ $('4b. Map Registry Status').item.json.reliance_id }}, 'CDD_INCOMPLETE', 'medium', 'open');",
+        "options": {}
+      },
+      "id": "n14",
+      "name": "14. Insert CDD Alert",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [5200, 460],
+      "credentials": { "postgres": { "id": "1", "name": "AML Sandbox Postgres" } }
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            { "name": "reliance_id", "type": "number", "value": "={{ $('4b. Map Registry Status').item.json.reliance_id }}" },
+            { "name": "bank_retains_ultimate_responsibility", "type": "boolean", "value": true },
+            { "name": "monitoring_owner", "type": "string", "value": "Bank compliance department" }
+          ]
+        }
+      },
+      "id": "n15",
+      "name": "15. Log Bank Responsibility (Reg 3 §3)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [5460, 340]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO documents (related_table, related_id, document_type, litigation_hold, file_reference) VALUES ('reliance_arrangements', {{ $json.reliance_id }}, 'RELIANCE_DOSSIER', FALSE, 'DOSSIER-' || {{ $json.reliance_id }}) RETURNING document_id;",
+        "options": {}
+      },
+      "id": "n16",
+      "name": "16. Insert Reliance Dossier",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [5720, 340],
+      "credentials": { "postgres": { "id": "1", "name": "AML Sandbox Postgres" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_logs (workflow_name, action, actor, reference_table, reference_id, details) VALUES ('ThirdParty_CDD_Reliance_Oversight', 'RELIANCE_VERIFICATION_COMPLETED', 'system', 'reliance_arrangements', {{ $('4b. Map Registry Status').item.json.reliance_id }}, '{{ JSON.stringify({ status: $('4b. Map Registry Status').item.json.status, risk_tier: $('8. Fetch Jurisdiction Risk (Reg 3 §6 / Reg 14)').item.json.risk_tier }) }}'::jsonb);",
+        "options": {}
+      },
+      "id": "n17",
+      "name": "17. Write Audit Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [5980, 340],
+      "credentials": { "postgres": { "id": "1", "name": "AML Sandbox Postgres" } }
+    }
+  ],
+  "connections": {
+    "1. Quarterly Timer": { "main": [[ { "node": "2. Fetch Reliance Arrangements", "type": "main", "index": 0 } ]] },
+    "2. Fetch Reliance Arrangements": { "main": [[ { "node": "3. Query Registry API (mock)", "type": "main", "index": 0 } ]] },
+    "3. Query Registry API (mock)": { "main": [[ { "node": "3b. Retrieve Reg 3 §5 (RAG - Chroma)", "type": "main", "index": 0 } ]] },
+    "3b. Retrieve Reg 3 §5 (RAG - Chroma)": { "main": [[ { "node": "4. AI Interpret Status (LLM)", "type": "main", "index": 0 } ]] },
+    "4. AI Interpret Status (LLM)": { "main": [[ { "node": "4b. Map Registry Status", "type": "main", "index": 0 } ]] },
+    "4b. Map Registry Status": { "main": [[ { "node": "5. Update Reliance Status", "type": "main", "index": 0 } ]] },
+    "5. Update Reliance Status": { "main": [[ { "node": "6. IF Group Member? (Reg 3 §7)", "type": "main", "index": 0 } ]] },
+    "6. IF Group Member? (Reg 3 §7)": {
+      "main": [
+        [ { "node": "7. Verify Group Policy", "type": "main", "index": 0 } ],
+        [ { "node": "8. Fetch Jurisdiction Risk (Reg 3 §6 / Reg 14)", "type": "main", "index": 0 } ]
+      ]
+    },
+    "7. Verify Group Policy": { "main": [[ { "node": "8. Fetch Jurisdiction Risk (Reg 3 §6 / Reg 14)", "type": "main", "index": 0 } ]] },
+    "8. Fetch Jurisdiction Risk (Reg 3 §6 / Reg 14)": { "main": [[ { "node": "9. IF Breach Detected?", "type": "main", "index": 0 } ]] },
+    "9. IF Breach Detected?": {
+      "main": [
+        [ { "node": "10. Insert Breach Alert", "type": "main", "index": 0 } ],
+        [ { "node": "12. Fetch Customer CDD Files", "type": "main", "index": 0 } ]
+      ]
+    },
+    "10. Insert Breach Alert": {
+      "main": [
+        [
+          { "node": "10b. Notify #cdd-reliance (Slack)", "type": "main", "index": 0 },
+          { "node": "10c. IF Status = Suspended?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "10c. IF Status = Suspended?": {
+      "main": [
+        [ { "node": "10d. Email Head of Compliance", "type": "main", "index": 0 } ],
+        [ { "node": "11. Compliance Approval Sign-Off", "type": "main", "index": 0 } ]
+      ]
+    },
+    "10d. Email Head of Compliance": { "main": [[ { "node": "11. Compliance Approval Sign-Off", "type": "main", "index": 0 } ]] },
+    "10b. Notify #cdd-reliance (Slack)": { "main": [[ { "node": "11. Compliance Approval Sign-Off", "type": "main", "index": 0 } ]] },
+    "11. Compliance Approval Sign-Off": { "main": [[ { "node": "11b. IF Approved?", "type": "main", "index": 0 } ]] },
+    "11b. IF Approved?": {
+      "main": [
+        [ { "node": "12. Fetch Customer CDD Files", "type": "main", "index": 0 } ],
+        [ { "node": "Reliance Suspended - Workflow Halted", "type": "main", "index": 0 } ]
+      ]
+    },
+    "12. Fetch Customer CDD Files": { "main": [[ { "node": "12b. Aggregate Document Types", "type": "main", "index": 0 } ]] },
+    "12b. Aggregate Document Types": { "main": [[ { "node": "13. IF Documents Complete? (Annexure I/II)", "type": "main", "index": 0 } ]] },
+    "13. IF Documents Complete? (Annexure I/II)": {
+      "main": [
+        [ { "node": "15. Log Bank Responsibility (Reg 3 §3)", "type": "main", "index": 0 } ],
+        [ { "node": "14. Insert CDD Alert", "type": "main", "index": 0 } ]
+      ]
+    },
+    "14. Insert CDD Alert": { "main": [[ { "node": "15. Log Bank Responsibility (Reg 3 §3)", "type": "main", "index": 0 } ]] },
+    "15. Log Bank Responsibility (Reg 3 §3)": { "main": [[ { "node": "16. Insert Reliance Dossier", "type": "main", "index": 0 } ]] },
+    "16. Insert Reliance Dossier": { "main": [[ { "node": "17. Write Audit Log", "type": "main", "index": 0 } ]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}
