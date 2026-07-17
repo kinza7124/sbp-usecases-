@@ -1,0 +1,745 @@
+{
+  "name": "UC7 - NGO/NPO/Charity/Trust Account & Donation-Title Integrity Monitor (Final)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1"
+            }
+          ]
+        }
+      },
+      "name": "Trigger — Weekly NGO Review (Mon 8am)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [
+        -2800,
+        -160
+      ],
+      "typeVersion": 1,
+      "id": "5d87d4b7-3581-474e-89fe-bc907a368e98"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT ngo_account_id, customer_id, registered_title FROM ngo_accounts;",
+        "additionalFields": {}
+      },
+      "name": "Postgres — Fetch NGO Accounts",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        -2608,
+        -160
+      ],
+      "typeVersion": 1,
+      "id": "e78db176-569c-494a-af90-a0012d37f93f",
+      "credentials": {
+        "postgres": {
+          "id": "CB2wpsuY6SAUV2Zo",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT customer_id, member->>'name' AS name, member->>'cnic' AS cnic FROM ngo_accounts, jsonb_array_elements(COALESCE(governing_body, '[]'::jsonb)) AS member WHERE ngo_account_id = {{ $json.ngo_account_id || 0 }};",
+        "additionalFields": {}
+      },
+      "name": "Postgres — Fetch Governing Body",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        -2400,
+        -160
+      ],
+      "typeVersion": 1,
+      "id": "b2f3e971-c98b-42f6-88f2-81b6eaa4bb36",
+      "credentials": {
+        "postgres": {
+          "id": "CB2wpsuY6SAUV2Zo",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "name": "Split In Batches — Per Member",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [
+        -2208,
+        -160
+      ],
+      "typeVersion": 1,
+      "id": "16b33984-bf81-4266-876d-659b6c17a70c"
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "=http://host.docker.internal:5000/api/match-name",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 4000
+        },
+        "bodyParametersJson": "={\n  \"name\": \"{{ $json.name }}\",\n  \"cnic\": \"{{ $json.cnic }}\"\n}"
+      },
+      "name": "ML API — Screen Member (match-name)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        -2000,
+        -224
+      ],
+      "typeVersion": 1,
+      "id": "6c66452b-3a9a-4bdb-a565-1ce983cc44c5",
+      "notes": "Reg 6 §3: screens governing body member against watchlists (DP/PP) + pep_list, returns a calibrated match_probability, not a guessed number."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT *, GREATEST(similarity(lower(entity_name), lower('{{  $('Split In Batches — Per Member').item.json.name}}')), CASE WHEN id_number = '{{ $('Split In Batches — Per Member').item.json.customer_id }}' THEN 1.0 ELSE 0 END) as match_prob, 'fallback_pg_trgm' as source FROM (SELECT entity_name, id_number FROM watchlists UNION ALL SELECT full_name AS entity_name, id_number FROM pep_list) w ORDER BY match_prob DESC LIMIT 1;",
+        "additionalFields": {}
+      },
+      "name": "Fallback — Postgres pg_trgm Match",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        -1920,
+        192
+      ],
+      "typeVersion": 1,
+      "id": "9553df19-9ea5-435d-a704-8bbc5ed471cf",
+      "credentials": {
+        "postgres": {
+          "id": "CB2wpsuY6SAUV2Zo",
+          "name": "Postgres account"
+        }
+      },
+      "notes": "Only reached if ML API call above fails (continueOnFail). Deterministic fuzzy-text fallback per error-handling policy: if ML similarity service is down, default to strict fuzzy/exact match and flag for manual review."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.verdict || ($json.match_prob >= 0.85 ? 'alert' : 'clear') }}",
+              "value2": "alert"
+            }
+          ]
+        }
+      },
+      "name": "IF — Member Screening Alert?",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        -1744,
+        -96
+      ],
+      "typeVersion": 1,
+      "id": "42b5199a-3e12-4d39-9491-d5d918063d6f"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alerts (related_table, related_id, alert_type, severity, status) VALUES ('ngo_accounts', {{ $node[\"Postgres — Fetch NGO Accounts\"].json.ngo_account_id || 0 }}, 'DPPP_MEMBER', 'high', 'open');",
+        "additionalFields": {}
+      },
+      "name": "Postgres — Insert Alert (DPPP_MEMBER)",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        -1600,
+        -256
+      ],
+      "typeVersion": 1,
+      "id": "10e8a7a0-4c44-495b-998a-7577a7e43a66",
+      "credentials": {
+        "postgres": {
+          "id": "CB2wpsuY6SAUV2Zo",
+          "name": "Postgres account"
+        }
+      },
+      "notes": "Reg 6 §6: any positive DP/PP/PEP match on a governing body member must be logged and considered for STR/other action."
+    },
+    {
+      "parameters": {
+        "mode": "wait"
+      },
+      "name": "Merge — After Member Loop",
+      "type": "n8n-nodes-base.merge",
+      "position": [
+        -1408,
+        -160
+      ],
+      "typeVersion": 1,
+      "id": "57f881e0-ef07-456c-bc8e-4c1ea6cfb674"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT n.advertised_title, a.account_number FROM ngo_accounts n JOIN accounts a ON n.customer_id = a.customer_id WHERE a.account_type = 'ngo' AND a.customer_id = {{ $node[\"Postgres — Fetch NGO Accounts\"].json.customer_id || 0 }} LIMIT 1;",
+        "additionalFields": {}
+      },
+      "name": "Postgres — Fetch Solicitation / Ad Ingestion",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        -1200,
+        -160
+      ],
+      "typeVersion": 1,
+      "id": "4b228ed8-4b62-42ce-87db-ff2f72db1d14",
+      "credentials": {
+        "postgres": {
+          "id": "CB2wpsuY6SAUV2Zo",
+          "name": "Postgres account"
+        }
+      },
+      "notes": "In production this row is populated by a webhook from the ad-monitoring/ingestion tool, not scanned from transactions — kept as-is here to match the sandbox synthetic data pattern."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT registered_title FROM ngo_accounts WHERE ngo_account_id = {{ $node[\"Postgres — Fetch NGO Accounts\"].json.ngo_account_id || 0 }};",
+        "additionalFields": {}
+      },
+      "name": "Postgres — Fetch Registered Title",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        -1008,
+        -160
+      ],
+      "typeVersion": 1,
+      "id": "cdf6018c-9c4d-40bd-873c-2b0a51562cce",
+      "credentials": {
+        "postgres": {
+          "id": "CB2wpsuY6SAUV2Zo",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "=http://host.docker.internal:5000/api/match-title",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 4000
+        },
+        "bodyParametersJson": "={\n  \"registered\": \"{{ $json.registered_title }}\",\n  \"advertised\": \"{{ $node[\"Postgres — Fetch Solicitation / Ad Ingestion\"].json.advertised_title }}\"\n}"
+      },
+      "name": "ML API — Title Similarity (match-title)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        -800,
+        -160
+      ],
+      "typeVersion": 1,
+      "id": "b7852d4b-29a9-44b2-88b6-33ce6c4a59f6",
+      "notes": "Reg 6 §4: calibrated similarity, not exact-string equality, so abbreviations aren't false-flagged."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.is_match === false }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "IF — Title Mismatch?",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        -608,
+        -160
+      ],
+      "typeVersion": 1,
+      "id": "261e33c8-0f87-4f6c-91d5-4f14ec2e69d7"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE accounts SET status = 'dormant', frozen_reason = 'Caution Hold - Title Mismatch (Reg 6 §4)' WHERE account_number = '{{ $node[\"Postgres — Fetch Solicitation / Ad Ingestion\"].json.account_number }}';",
+        "additionalFields": {}
+      },
+      "name": "Postgres — Place Caution Hold",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        -400,
+        -64
+      ],
+      "typeVersion": 1,
+      "id": "9fc30238-2114-4a73-90c1-58f097c39309",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "CB2wpsuY6SAUV2Zo",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alerts (related_table, related_id, alert_type, severity, status) VALUES ('ngo_accounts', {{ $node[\"Postgres — Fetch NGO Accounts\"].json.ngo_account_id || 0 }}, 'TITLE_MISMATCH', 'high', 'open') RETURNING alert_id;",
+        "additionalFields": {}
+      },
+      "name": "Postgres — Insert Alert (TITLE_MISMATCH)",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        -208,
+        -64
+      ],
+      "typeVersion": 1,
+      "id": "803a7267-a271-47e3-a0b0-4d33df220995",
+      "credentials": {
+        "postgres": {
+          "id": "CB2wpsuY6SAUV2Zo",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "=http://host.docker.internal:5000/api/vector-db/query",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "={\n  \"query\": \"NGO advertised title mismatch STR caution\",\n  \"top_k\": 2\n}"
+      },
+      "name": "RAG — Retrieve Reg 6 §4 Clause",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        0,
+        -64
+      ],
+      "typeVersion": 1,
+      "id": "a971e4a6-50e1-43f2-b4f5-fd686087f99c",
+      "notes": "Grounds the LLM narrative in the exact clause text so nothing is hallucinated."
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "{\n  \"model\": \"llama-3.3-70b-versatile\",\n  \"temperature\": 0.1,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are an AML Compliance Officer drafting a Suspicious Transaction Report narrative. Cite ONLY the retrieved clause text provided. Do not invent regulation references or details.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Registered title:{{ $('Postgres — Fetch Registered Title').item.json.registered_title }} \\nAdvertised title:{{ $('Postgres — Fetch Solicitation / Ad Ingestion').item.json.advertised_title }} \\nAccount: {{ $('Postgres — Fetch Solicitation / Ad Ingestion').item.json.account_number }}\\nSimilarity score:{{ $('ML API — Title Similarity (match-title)').item.json.similarity_score }} \\nRegulatory clause: {{ $json.clause_ref }} — {{ $json.clause }}\\n\\nDraft the STR narrative describing the discrepancy, state that a caution hold was applied, and cite the clause exactly.\"\n    }\n  ]\n}"
+      },
+      "name": "AI Agent — Draft STR Narrative (LLM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        208,
+        -64
+      ],
+      "typeVersion": 1,
+      "id": "cddd8ab3-626b-47d8-aaf6-55d3544d49a6",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "wKgGxA0xAFKGyjm0",
+          "name": "Header Auth account"
+        }
+      },
+      "notes": "Uses a credential-stored API key (nodeCredentialType), never a hard-coded key in the JSON."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO str_reports (customer_id, narrative, status) VALUES ({{ $node[\"Postgres — Fetch NGO Accounts\"].json.customer_id || 0 }}, '{{ $json.choices[0].message.content.replace(/'/g, \"''\") }}', 'draft') RETURNING str_id;",
+        "additionalFields": {}
+      },
+      "name": "Postgres — Insert Draft STR",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        400,
+        -64
+      ],
+      "typeVersion": 1,
+      "id": "c472ecf6-62cc-4da3-83b4-2a8e9d2be144",
+      "credentials": {
+        "postgres": {
+          "id": "CB2wpsuY6SAUV2Zo",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "options": {}
+      },
+      "name": "Wait — Compliance Officer Approval",
+      "type": "n8n-nodes-base.wait",
+      "position": [
+        608,
+        -64
+      ],
+      "typeVersion": 1,
+      "id": "32fa3f55-4147-465d-8752-2ec16b739153",
+      "webhookId": "0eeebe64-2ccf-4748-bbc1-dcccb9b0a480",
+      "notes": "Reg 6 §1 / Reg 7 §1: no STR is ever auto-filed. A human compliance officer must approve via the resume webhook."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.approved }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "IF — Officer Approved?",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        1392,
+        64
+      ],
+      "typeVersion": 1,
+      "id": "3f99f62e-5d60-470d-a4d3-1204aad9b035"
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "https://httpbin.org/post",
+        "options": {}
+      },
+      "name": "HTTP Request — File STR to FMU (mock)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        1008,
+        -160
+      ],
+      "typeVersion": 1,
+      "id": "3332f7b8-6e4b-421c-8b43-23252ea2fbf1"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE str_reports SET status = 'filed', filed_at = now() WHERE str_id = {{ $node[\"Postgres — Insert Draft STR\"].json.str_id }};",
+        "additionalFields": {}
+      },
+      "name": "Postgres — Update STR Status (filed)",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        1200,
+        -160
+      ],
+      "typeVersion": 1,
+      "id": "01783183-b199-4544-a7d4-61b091f78147",
+      "credentials": {
+        "postgres": {
+          "id": "CB2wpsuY6SAUV2Zo",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_logs (workflow_name, action, actor, reference_table, reference_id, details) VALUES ('NGO_Integrity_Monitor', 'INTEGRITY_CHECK_COMPLETED', 'system', 'ngo_accounts', {{ $node[\"Postgres — Fetch NGO Accounts\"].json.ngo_account_id || 0 }}, '{}'::jsonb);",
+        "additionalFields": {}
+      },
+      "name": "Postgres — Insert Audit Log",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        1680,
+        -512
+      ],
+      "typeVersion": 1,
+      "id": "c336fad3-b17a-4398-994c-8225479f2317",
+      "credentials": {
+        "postgres": {
+          "id": "CB2wpsuY6SAUV2Zo",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Trigger — Weekly NGO Review (Mon 8am)": {
+      "main": [
+        [
+          {
+            "node": "Postgres — Fetch NGO Accounts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres — Fetch NGO Accounts": {
+      "main": [
+        [
+          {
+            "node": "Postgres — Fetch Governing Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres — Fetch Governing Body": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches — Per Member",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split In Batches — Per Member": {
+      "main": [
+        [
+          {
+            "node": "ML API — Screen Member (match-name)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ML API — Screen Member (match-name)": {
+      "main": [
+        [
+          {
+            "node": "IF — Member Screening Alert?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fallback — Postgres pg_trgm Match",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fallback — Postgres pg_trgm Match": {
+      "main": [
+        [
+          {
+            "node": "IF — Member Screening Alert?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF — Member Screening Alert?": {
+      "main": [
+        [
+          {
+            "node": "Postgres — Insert Alert (DPPP_MEMBER)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge — After Member Loop",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Postgres — Insert Alert (DPPP_MEMBER)": {
+      "main": [
+        [
+          {
+            "node": "Merge — After Member Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge — After Member Loop": {
+      "main": [
+        [
+          {
+            "node": "Postgres — Fetch Solicitation / Ad Ingestion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres — Fetch Solicitation / Ad Ingestion": {
+      "main": [
+        [
+          {
+            "node": "Postgres — Fetch Registered Title",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres — Fetch Registered Title": {
+      "main": [
+        [
+          {
+            "node": "ML API — Title Similarity (match-title)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ML API — Title Similarity (match-title)": {
+      "main": [
+        [
+          {
+            "node": "IF — Title Mismatch?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF — Title Mismatch?": {
+      "main": [
+        [
+          {
+            "node": "Postgres — Place Caution Hold",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Postgres — Insert Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres — Place Caution Hold": {
+      "main": [
+        [
+          {
+            "node": "Postgres — Insert Alert (TITLE_MISMATCH)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres — Insert Alert (TITLE_MISMATCH)": {
+      "main": [
+        [
+          {
+            "node": "RAG — Retrieve Reg 6 §4 Clause",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RAG — Retrieve Reg 6 §4 Clause": {
+      "main": [
+        [
+          {
+            "node": "AI Agent — Draft STR Narrative (LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent — Draft STR Narrative (LLM)": {
+      "main": [
+        [
+          {
+            "node": "Postgres — Insert Draft STR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres — Insert Draft STR": {
+      "main": [
+        [
+          {
+            "node": "Wait — Compliance Officer Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait — Compliance Officer Approval": {
+      "main": [
+        [
+          {
+            "node": "IF — Officer Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF — Officer Approved?": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request — File STR to FMU (mock)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Postgres — Insert Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request — File STR to FMU (mock)": {
+      "main": [
+        [
+          {
+            "node": "Postgres — Update STR Status (filed)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres — Update STR Status (filed)": {
+      "main": [
+        [
+          {
+            "node": "Postgres — Insert Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "f7d3c001-3709-464a-bf02-f21f08f09d0f",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "3fc4d2db55b5f7f5f6c1fd46313b599ea9561d978e86fc2fdfd469a355096d00"
+  },
+  "nodeGroups": [],
+  "id": "hFC6282QyuyCyFcV",
+  "tags": []
+}

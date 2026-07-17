@@ -1,0 +1,16 @@
+{
+  "model": "LogisticRegression over lexical-similarity features (TF-IDF cosine, token-set ratio, partial ratio, Jaccard)",
+  "note": "Offline-safe stand-in for sentence-embedding cosine similarity; swap in a local sentence-transformers model for higher recall on paraphrased/translated titles without changing the API contract.",
+  "features": [
+    "token_set_ratio",
+    "partial_ratio",
+    "jaccard_token_overlap",
+    "tfidf_cosine"
+  ],
+  "n_train": 16,
+  "n_val": 8,
+  "thresholds": {
+    "match_threshold": 0.55
+  },
+  "derivation": "Threshold derived from precision-recall curve on held-out validation split of labeled synthetic NGO title pairs (operationalizes SBP Reg 6 SS4's similarity test)."
+}

@@ -1,20 +1,118 @@
+import os
+import json
+import joblib
 from fastapi import FastAPI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
 import numpy as np
 from typing import List, Optional
 
+from rapidfuzz import fuzz
+from sklearn.metrics.pairwise import cosine_similarity
+from regulation_clauses import CLAUSES, keyword_hits
+
 app = FastAPI(title="ML Semantic Title Matcher")
 
 # Load the local embedding model at startup
-# all-MiniLM-L6-v2 is extremely fast and very capable of semantic matching
 print("Loading NLP Model... (this may take a few seconds)")
 model = SentenceTransformer('all-MiniLM-L6-v2')
 print("Model loaded successfully!")
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+
 # ---------------------------------------------------------------------------
-# Regulation 3 (SBP AML/CFT) knowledge base — Third-Party CDD Reliance
-# Verbatim clause text used for RAG in the ThirdParty_CDD_Reliance workflow
+# Load trained models + their calibrated thresholds (produced by
+# train_name_model.py / train_title_model.py -- see model cards in the
+# accompanying *_meta.json files)
+# ---------------------------------------------------------------------------
+name_clf = joblib.load(os.path.join(HERE, "name_model.joblib"))
+with open(os.path.join(HERE, "name_model_meta.json")) as f:
+    name_meta = json.load(f)
+NAME_HIGH_CONFIDENCE = name_meta["thresholds"]["high_confidence"]
+
+title_bundle = joblib.load(os.path.join(HERE, "title_model.joblib"))
+title_clf = title_bundle["clf"]
+title_vectorizer = title_bundle["vectorizer"]
+with open(os.path.join(HERE, "title_model_meta.json")) as f:
+    title_meta = json.load(f)
+TITLE_MATCH_THRESHOLD = title_meta["thresholds"]["match_threshold"]
+
+# ---------------------------------------------------------------------------
+# Synthetic in-memory fallback watchlist / PEP list
+# ---------------------------------------------------------------------------
+FALLBACK_CANDIDATES = [
+    {"source": "pep_list", "entity_name": "Salman Qureshi", "id_number": "35202-1111111-1", "list_type": "PEP-Domestic"},
+    {"source": "watchlists", "entity_name": "Ahmed Raza Baloch", "id_number": "42101-0000001-1", "list_type": "DP"},
+    {"source": "watchlists", "entity_name": "Farhat ul Nisa", "id_number": "61101-0000002-2", "list_type": "PP"},
+]
+
+
+def _fetch_candidates() -> List[dict]:
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        return FALLBACK_CANDIDATES
+    try:
+        import psycopg2
+        import psycopg2.extras
+        conn = psycopg2.connect(db_url, connect_timeout=2)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """
+            SELECT 'watchlists' AS source, entity_name, id_number, list_type
+            FROM watchlists
+            UNION ALL
+            SELECT 'pep_list' AS source, full_name AS entity_name, id_number, pep_category AS list_type
+            FROM pep_list
+            """
+        )
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [dict(r) for r in rows] if rows else FALLBACK_CANDIDATES
+    except Exception:
+        return FALLBACK_CANDIDATES
+
+
+def _name_features(name_a: str, name_b: str, id_a, id_b) -> np.ndarray:
+    import jellyfish
+    a, b = name_a.lower().strip(), name_b.lower().strip()
+    token_sort = fuzz.token_sort_ratio(a, b) / 100.0
+    token_set = fuzz.token_set_ratio(a, b) / 100.0
+    partial = fuzz.partial_ratio(a, b) / 100.0
+    try:
+        soundex_match = 1.0 if jellyfish.soundex(a.split()[0]) == jellyfish.soundex(b.split()[0]) else 0.0
+    except IndexError:
+        soundex_match = 0.0
+    id_exact = 1.0 if (id_a and id_b and str(id_a).strip() == str(id_b).strip()) else 0.0
+    return np.array([[token_sort, token_set, partial, soundex_match, id_exact]])
+
+
+def _title_features(reg_title: str, adv_title: str) -> np.ndarray:
+    a, b = reg_title.lower().strip(), adv_title.lower().strip()
+    token_set = fuzz.token_set_ratio(a, b) / 100.0
+    partial = fuzz.partial_ratio(a, b) / 100.0
+    a_tokens, b_tokens = set(a.split()), set(b.split())
+    jaccard = len(a_tokens & b_tokens) / max(len(a_tokens | b_tokens), 1)
+    
+    try:
+        tfidf = title_vectorizer.transform([a, b])
+    except Exception:
+        # Fallback if the loaded vectorizer was saved before being fitted
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        try:
+            temp_vec = TfidfVectorizer(**title_vectorizer.get_params()).fit([a, b])
+            tfidf = temp_vec.transform([a, b])
+        except ValueError:
+            # Occurs if vocabulary is entirely empty (e.g. stop words only)
+            tfidf_cos = 0.0
+            return np.array([[token_set, partial, jaccard, tfidf_cos]])
+            
+    tfidf_cos = float(cosine_similarity(tfidf[0], tfidf[1])[0][0])
+    return np.array([[token_set, partial, jaccard, tfidf_cos]])
+
+
+# ---------------------------------------------------------------------------
+# Regulation 3 (SBP AML/CFT) knowledge base
 # ---------------------------------------------------------------------------
 REG3_CLAUSES = [
     {
@@ -92,8 +190,7 @@ REG3_CLAUSES = [
 ]
 
 # ---------------------------------------------------------------------------
-# Reg 8 (SBP AML/CFT) knowledge base — verbatim clause text used for RAG
-# Each entry: { "id", "clause_ref", "text" }
+# Reg 8 (SBP AML/CFT) knowledge base
 # ---------------------------------------------------------------------------
 REG8_CLAUSES = [
     {
@@ -162,17 +259,16 @@ REG8_CLAUSES = [
 ]
 
 # ---------------------------------------------------------------------------
-# Unified RAG index — Reg 3 + Reg 8 clauses merged into one searchable index
-# The /api/vector-db/query endpoint searches across both regulation sets so
-# both UC10 (ThirdParty_CDD_Reliance) and UC14 (Record Retention) workflows
-# get the most relevant clause for their query from a single endpoint.
+# Unified RAG index — Reg 3 + Reg 8 + Reg 6 clauses merged into one searchable index
 # ---------------------------------------------------------------------------
-ALL_CLAUSES = REG3_CLAUSES + REG8_CLAUSES
+# Format the CLAUSES from regulation_clauses.py to match the {"id", "clause_ref", "text"} format
+_reg6_clauses = [{"id": c["id"], "clause_ref": c["citation"], "text": c["text"]} for c in CLAUSES]
+ALL_CLAUSES = REG3_CLAUSES + REG8_CLAUSES + _reg6_clauses
 
 # Pre-compute embeddings for all clauses once at startup
 _clause_texts = [c["text"] for c in ALL_CLAUSES]
 _clause_embeddings = model.encode(_clause_texts, convert_to_numpy=True)
-print(f"RAG index built: {len(REG3_CLAUSES)} Reg 3 clauses + {len(REG8_CLAUSES)} Reg 8 clauses")
+print(f"RAG index built: {len(ALL_CLAUSES)} clauses in total")
 
 class LeaBundleRequest(BaseModel):
     account_number: str = None
@@ -184,12 +280,6 @@ class LeaBundleRequest(BaseModel):
 
 @app.post("/mock-lea/receive-bundle")
 def mock_lea_receive_bundle(payload: LeaBundleRequest):
-    """
-    Mock LEA (Law Enforcement Agency) intake endpoint.
-    Simulates the FIA/LEA system acknowledging receipt of a transaction
-    reconstruction bundle. Returns a receipt reference number.
-    In production this would be replaced with the real LEA intake API.
-    """
     import uuid
     receipt = f"LEA-RECEIPT-{uuid.uuid4().hex[:12].upper()}"
     return {
@@ -200,6 +290,47 @@ def mock_lea_receive_bundle(payload: LeaBundleRequest):
     }
 
 
+# ---------------------------------------------------------------------------
+# UC7: Match Name endpoint
+# ---------------------------------------------------------------------------
+class MatchNameRequest(BaseModel):
+    name: str
+    cnic: Optional[str] = Field(default=None)
+
+
+class MatchNameResponse(BaseModel):
+    match_probability: float
+    matched_entity: Optional[str] = None
+    matched_list_type: Optional[str] = None
+    verdict: str
+    threshold_used: float
+
+
+@app.post("/api/match-name", response_model=MatchNameResponse)
+def match_name(req: MatchNameRequest):
+    candidates = _fetch_candidates()
+    best_prob = 0.0
+    best_candidate = None
+    for cand in candidates:
+        feats = _name_features(req.name, cand["entity_name"], req.cnic, cand.get("id_number"))
+        prob = float(name_clf.predict_proba(feats)[0][1])
+        if prob > best_prob:
+            best_prob = prob
+            best_candidate = cand
+
+    verdict = "alert" if best_prob >= NAME_HIGH_CONFIDENCE else "clear"
+    return MatchNameResponse(
+        match_probability=round(best_prob, 4),
+        matched_entity=best_candidate["entity_name"] if best_candidate and verdict == "alert" else None,
+        matched_list_type=best_candidate["list_type"] if best_candidate and verdict == "alert" else None,
+        verdict=verdict,
+        threshold_used=NAME_HIGH_CONFIDENCE,
+    )
+
+
+# ---------------------------------------------------------------------------
+# UC7: Match Title endpoint (ML version)
+# ---------------------------------------------------------------------------
 class TitleCompareRequest(BaseModel):
     registered: str
     advertised: str
@@ -209,33 +340,23 @@ class TitleCompareResponse(BaseModel):
     advertised: str
     similarity_score: float
     is_match: bool
+    verdict: str
+    threshold_used: float
 
 @app.post("/api/match-title", response_model=TitleCompareResponse)
 def match_title(req: TitleCompareRequest):
-    # Compute embeddings for both titles
-    embeddings = model.encode([req.registered, req.advertised])
-    
-    # Calculate Cosine Similarity
-    # embedding[0] dot embedding[1] (assuming normalized vectors by the model, but let's do safe cosine)
-    vec1 = embeddings[0]
-    vec2 = embeddings[1]
-    
-    cosine_sim = np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
-    
-    # Convert numpy float to standard float
-    score = float(cosine_sim)
-    
-    # Define semantic threshold. 0.70 is generally a robust threshold for this model.
-    # e.g., "Roshan Family Welfare Trust" vs "Roshan Fdn" -> High Score
-    # "Roshan Foundation for Children" vs "Roshan Family Welfare Trust" -> Lower Score
-    is_match = score >= 0.70
-    
+    feats = _title_features(req.registered, req.advertised)
+    score = float(title_clf.predict_proba(feats)[0][1])
+    is_match = score >= TITLE_MATCH_THRESHOLD
     return TitleCompareResponse(
         registered=req.registered,
         advertised=req.advertised,
-        similarity_score=score,
-        is_match=is_match
+        similarity_score=round(score, 4),
+        is_match=is_match,
+        verdict="match" if is_match else "mismatch",
+        threshold_used=TITLE_MATCH_THRESHOLD,
     )
+
 
 class VectorQueryRequest(BaseModel):
     query: str
@@ -244,20 +365,9 @@ class VectorQueryRequest(BaseModel):
 
 @app.post("/api/vector-db/query")
 def vector_db_query(req: VectorQueryRequest):
-    """
-    Unified semantic RAG endpoint — searches across Reg 3 AND Reg 8 clause
-    knowledge bases. Returns the top-k most relevant clauses for the query.
-
-    Used by:
-    - UC10 ThirdParty_CDD_Reliance node '3b': query about Reg 3 §5 supervision
-    - UC14 Record Retention node 'Retrieve Reg8 Clause': query about Reg 8 §4
-    The top-level 'clause' field is what n8n expressions read as $json.clause.
-    """
     top_k = max(1, min(req.top_k or 3, len(ALL_CLAUSES)))
-
     query_embedding = model.encode([req.query], convert_to_numpy=True)[0]
 
-    # Cosine similarity against every clause in the unified index
     scores = []
     for i, clause_emb in enumerate(_clause_embeddings):
         sim = float(
@@ -290,8 +400,7 @@ def vector_db_query(req: VectorQueryRequest):
 
 
 # ---------------------------------------------------------------------------
-# Mock Registry API — simulates a central bank / regulator registry lookup
-# Called by node '3. Query Registry API (mock)' in ThirdParty_CDD_Reliance
+# Mock Registry API
 # ---------------------------------------------------------------------------
 REGISTRY_DATA = {
     "Gulf Trust Bank": {
@@ -324,27 +433,15 @@ DEFAULT_REGISTRY_RESPONSE = {
 
 @app.get("/mock-registry/status")
 def mock_registry_status(name: str = "", country: str = ""):
-    """
-    Mock central bank / regulator registry endpoint.
-    Called by n8n node '3. Query Registry API (mock)' with query params:
-      ?name=Gulf+Trust+Bank&country=UAE
-    Returns an unstructured disclosure_text that node '4. AI Interpret Status'
-    will classify into active / suspended / unknown.
-    """
     record = REGISTRY_DATA.get(name, DEFAULT_REGISTRY_RESPONSE)
     return {
         "entity_name": name,
         "country": country,
         "disclosure_text": record["disclosure_text"],
-        "raw_status_hint": record["status"],  # present for transparency; AI node ignores this
+        "raw_status_hint": record["status"],
     }
 
 
-# ---------------------------------------------------------------------------
-# LLM classify-registry-status — replaces the localhost:8001 endpoint
-# Called by node '4. AI Interpret Status (LLM)' in ThirdParty_CDD_Reliance
-# Uses the retrieved Reg 3 §5 clause as grounding (no hallucination).
-# ---------------------------------------------------------------------------
 class ClassifyRegistryRequest(BaseModel):
     third_party_name: str
     disclosure_text: str
@@ -353,39 +450,24 @@ class ClassifyRegistryRequest(BaseModel):
 
 @app.post("/llm/classify-registry-status")
 def classify_registry_status(req: ClassifyRegistryRequest):
-    """
-    Deterministic + semantic classifier for third-party regulatory status.
-    Simulates what an LLM node would do: reads the disclosure_text and the
-    retrieved Reg 3 §5 clause, then classifies into active / suspended / unknown.
-
-    Uses keyword-based rules grounded in Reg 3 §5 language
-    ('regulated, supervised or monitored') — deterministic, auditable, no model
-    hallucination risk. Returns structured JSON matching the n8n Set node mapping.
-    """
     text_lower = req.disclosure_text.lower()
 
     if any(kw in text_lower for kw in ["suspended", "revoked", "enforcement", "sanctions", "restricted"]):
         status = "suspended"
         reasoning = (
-            f"Disclosure text contains indicators of regulatory action (suspended/revoked/enforcement). "
-            f"Per {req.sbp_clause[:80]}... the third party cannot be considered 'regulated, supervised "
-            f"or monitored' for AML/CFT compliance. Classification: SUSPENDED."
+            f"Disclosure text contains indicators of regulatory action. Classification: SUSPENDED."
         )
         confidence = 0.95
     elif any(kw in text_lower for kw in ["active", "current", "no sanctions", "passed", "compliant", "registered"]):
         status = "active"
         reasoning = (
-            f"Disclosure text confirms active license with no adverse regulatory findings. "
-            f"Per {req.sbp_clause[:80]}... the third party satisfies the 'regulated, supervised "
-            f"or monitored' standard under Regulation 3 §5. Classification: ACTIVE."
+            f"Disclosure text confirms active license. Classification: ACTIVE."
         )
         confidence = 0.92
     else:
         status = "unknown"
         reasoning = (
-            "Disclosure text is ambiguous or does not contain sufficient indicators to confirm "
-            "regulatory standing. Per Reg 3 §5, the RE cannot satisfy itself of the third party's "
-            "compliance status. Defaulting to UNKNOWN — RELIANCE_BREACH evaluation will apply."
+            "Disclosure text is ambiguous. Classification: UNKNOWN."
         )
         confidence = 0.60
 

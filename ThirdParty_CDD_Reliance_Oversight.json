@@ -44,7 +44,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "http://ml-api:5000/mock-registry/status",
+        "url": "http://host.docker.internal:5000/mock-registry/status",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -67,7 +67,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://ml-api:5000/api/vector-db/query",
+        "url": "http://host.docker.internal:5000/api/vector-db/query",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ query: \"third party regulated supervised CDD record keeping Regulation 3 reliance arrangement\", top_k: 1 }) }}",
@@ -82,7 +82,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://ml-api:5000/llm/classify-registry-status",
+        "url": "http://host.docker.internal:5000/llm/classify-registry-status",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ third_party_name: $('2. Fetch Reliance Arrangements').item.json.third_party_name, disclosure_text: $('3. Query Registry API (mock)').item.json.disclosure_text, sbp_clause: $json.clause }) }}",
@@ -120,7 +120,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE reliance_arrangements SET regulatory_status = '{{ $json.status }}', last_verified = now() WHERE reliance_id = {{ $json.reliance_id }};",
+        "query": "UPDATE reliance_arrangements SET regulatory_status = '{{ $json.status }}', last_verified = now() WHERE reliance_id = {{ $json.reliance_id }} RETURNING *;",
         "options": {}
       },
       "id": "n5",

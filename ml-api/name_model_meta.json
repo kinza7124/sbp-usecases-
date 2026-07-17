@@ -1,0 +1,17 @@
+{
+  "model": "LogisticRegression",
+  "features": [
+    "token_sort_ratio",
+    "token_set_ratio",
+    "partial_ratio",
+    "soundex_surname_match",
+    "id_number_exact_match"
+  ],
+  "n_train": 21,
+  "n_val": 9,
+  "thresholds": {
+    "high_confidence": 0.73,
+    "grey_zone_floor": 0.63
+  },
+  "derivation": "Thresholds derived from precision-recall curve on held-out validation split of labeled synthetic name pairs (operationalizes SBP Reg 4 \u00a78 / Reg 6 \u00a73 'properly analyze any similarity')."
+}

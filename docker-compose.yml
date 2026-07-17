@@ -23,9 +23,14 @@ services:
     container_name: sbp-n8n
 
     restart: unless-stopped
+    dns:
+      - 8.8.8.8
 
     ports:
       - "5678:5678"
+
+    env_file:
+      - .env
 
     environment:
       - DB_TYPE=sqlite
@@ -35,29 +40,6 @@ services:
 
     depends_on:
       - postgres
-
-  ml-api:
-    build: ./ml-api
-    container_name: ml-api
-    restart: unless-stopped
-    ports:
-      - "5000:5000"
-
-  # UC11 — Cross-Border Exposure ML scoring service (port 5001)
-  ml-service:
-    build: ./services/ml_service
-    container_name: ml-service
-    restart: unless-stopped
-    ports:
-      - "5001:5001"
-
-  # UC11 — SBP Regulations RAG retrieval service (port 8000)
-  rag-service:
-    build: ./services/rag_service
-    container_name: rag-service
-    restart: unless-stopped
-    ports:
-      - "8000:8000"
 
 volumes:
   postgres_data:

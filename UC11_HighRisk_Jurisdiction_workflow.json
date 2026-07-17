@@ -67,7 +67,7 @@
         "jsonBody": "={{ { \"query_texts\": [\"high risk jurisdiction counter measures cross border EDD\"], \"n_results\": 3, \"where\": {\"regulation\": {\"$in\": [\"Reg 14\", \"Reg 2\", \"Reg 9\"]}} } }}",
         "options": {}
       },
-      "notes": "RAG retrieval (Chroma) of Regulation 14 §1, Regulation 2 §16(b) and Regulation 9 §2 clause text, used to ground the AI notice-parser and the later EDD memo drafting node."
+      "notes": "RAG retrieval (Chroma) of Regulation 14 \u00a71, Regulation 2 \u00a716(b) and Regulation 9 \u00a72 clause text, used to ground the AI notice-parser and the later EDD memo drafting node."
     },
     {
       "id": "b9458cf7-abdb-4aef-a94d-e0c7e54a8a7e",
@@ -81,28 +81,28 @@
       "parameters": {
         "method": "POST",
         "url": "https://api.groq.com/openai/v1/chat/completions",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
+        "authentication": "none",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
-              "name": "Content-Type",
-              "value": "application/json"
+              "name": "Authorization",
+              "value": "=Bearer {{$env.GROQ_API_KEY}}"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ { \"model\": \"llama-3.3-70b-versatile\", \"messages\": [ {\"role\": \"system\", \"content\": \"You are an expert SBP Regulatory Analyst. Extract the country and SBP risk classification (high_risk / monitored / normal) strictly from the notice text, grounded only in the retrieved regulation clause. Respond ONLY as JSON: {\\\"country\\\":..,\\\"risk_tier\\\":..}\"}, {\"role\": \"user\", \"content\": \"Notice: \" + $json.notice_text + \"\\nRegulation Context: \" + $node[\"Query Vector Store - Reg14\"].json.documents[0].join(\" \") } ], \"temperature\": 0 } }}",
-        "options": {}
+        "options": {},
+        "contentType": "json"
       },
       "credentials": {
         "httpHeaderAuth": {
           "name": "Groq API Key"
         }
       },
-      "notes": "Maps informal FATF/SBP language to the workflow's fixed risk_tier vocabulary (high_risk/monitored/normal). Uses Groq Header Auth credential named 'Groq API Key' — same credential used in UC10."
+      "notes": "Maps informal FATF/SBP language to the workflow's fixed risk_tier vocabulary (high_risk/monitored/normal). Uses Groq Header Auth credential named 'Groq API Key' \u2014 same credential used in UC10."
     },
     {
       "id": "a5007f8c-f0cb-4fb7-9487-5f9d79f7e9b4",
@@ -150,10 +150,9 @@
         400
       ],
       "parameters": {
-        "mode": "expression",
-        "output": "={{$json.event_type}}",
+        "mode": "rules",
         "rules": {
-          "rules": [
+          "values": [
             {
               "outputKey": "TRANSACTION",
               "conditions": {
@@ -164,9 +163,16 @@
                     "operator": {
                       "type": "string",
                       "operation": "equals"
-                    }
+                    },
+                    "id": "c1"
                   }
-                ]
+                ],
+                "combinator": "and",
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                }
               }
             },
             {
@@ -179,9 +185,16 @@
                     "operator": {
                       "type": "string",
                       "operation": "equals"
-                    }
+                    },
+                    "id": "c1"
                   }
-                ]
+                ],
+                "combinator": "and",
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                }
               }
             }
           ]
@@ -202,6 +215,7 @@
         100
       ],
       "parameters": {
+        "resource": "database",
         "operation": "executeQuery",
         "query": "SELECT c.customer_id, c.full_name, c.country, t.transaction_id, t.counterparty_name, t.counterparty_country, t.amount FROM customers c LEFT JOIN accounts a ON a.customer_id = c.customer_id LEFT JOIN transactions t ON t.account_id = a.account_id AND t.transaction_id = {{$json.transaction_id}} WHERE c.customer_id = {{$json.customer_id}};"
       },
@@ -249,6 +263,7 @@
         -40
       ],
       "parameters": {
+        "resource": "database",
         "operation": "executeQuery",
         "query": "INSERT INTO alerts (related_table, related_id, alert_type, severity, status) VALUES ('customers', {{$json.customer_id}}, 'COUNTRY_MISSING', 'medium', 'open');"
       },
@@ -276,6 +291,7 @@
         100
       ],
       "parameters": {
+        "resource": "database",
         "operation": "executeQuery",
         "query": "SELECT risk_tier, counter_measure FROM jurisdiction_list WHERE country_name = '{{$json.counterparty_country || $json.country}}';"
       },
@@ -291,10 +307,9 @@
         100
       ],
       "parameters": {
-        "mode": "expression",
-        "output": "={{$json.risk_tier}}",
+        "mode": "rules",
         "rules": {
-          "rules": [
+          "values": [
             {
               "outputKey": "high_risk",
               "conditions": {
@@ -305,9 +320,16 @@
                     "operator": {
                       "type": "string",
                       "operation": "equals"
-                    }
+                    },
+                    "id": "c1"
                   }
-                ]
+                ],
+                "combinator": "and",
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                }
               }
             },
             {
@@ -320,9 +342,16 @@
                     "operator": {
                       "type": "string",
                       "operation": "equals"
-                    }
+                    },
+                    "id": "c1"
                   }
-                ]
+                ],
+                "combinator": "and",
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                }
               }
             },
             {
@@ -335,9 +364,16 @@
                     "operator": {
                       "type": "string",
                       "operation": "equals"
-                    }
+                    },
+                    "id": "c1"
                   }
-                ]
+                ],
+                "combinator": "and",
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                }
               }
             }
           ]
@@ -388,6 +424,7 @@
         220
       ],
       "parameters": {
+        "resource": "database",
         "operation": "executeQuery",
         "query": "INSERT INTO alerts (related_table, related_id, alert_type, severity, status) VALUES ('customers', {{$node[\"Fetch Customer & Txn Geo-Data\"].json.customer_id}}, 'JURISDICTION_RISK', 'low', 'open');"
       },
@@ -445,6 +482,7 @@
         60
       ],
       "parameters": {
+        "resource": "database",
         "operation": "executeQuery",
         "query": "INSERT INTO risk_profiles (customer_id, risk_rating, rating_basis) VALUES ({{$node[\"Fetch Customer & Txn Geo-Data\"].json.customer_id}}, 'high', 'High-Risk Jurisdiction Exposure') ON CONFLICT (customer_id) DO UPDATE SET risk_rating = 'high', rating_basis = 'High-Risk Jurisdiction Exposure', last_reviewed = now();"
       },
@@ -512,9 +550,8 @@
       ],
       "parameters": {
         "resume": "webhook",
-        "webhookOptions": {
-          "httpMethod": "POST",
-          "path": "jurisdiction-risk-approval"
+        "options": {
+          "webhookSuffix": "jurisdiction-risk-approval"
         }
       },
       "notes": "Reg 2 \u00a716(f)/\u00a717(f) and Reg 9 \u00a71(c): a high-risk cross-border transaction hold requires senior-management/compliance sign-off before continuation. Workflow suspends and resumes on the compliance officer's decision webhook."
@@ -561,6 +598,7 @@
         -180
       ],
       "parameters": {
+        "resource": "database",
         "operation": "executeQuery",
         "query": "UPDATE wire_transfers SET status = 'hold' WHERE wire_id = {{$node[\"Fetch Customer & Txn Geo-Data\"].json.transaction_id}};"
       },
@@ -624,6 +662,7 @@
         -80
       ],
       "parameters": {
+        "resource": "database",
         "operation": "executeQuery",
         "query": "INSERT INTO alerts (related_table, related_id, alert_type, severity, status) VALUES ('customers', {{$node[\"Fetch Customer & Txn Geo-Data\"].json.customer_id}}, 'JURISDICTION_RISK', 'high', 'open') RETURNING alert_id;"
       },
@@ -646,7 +685,7 @@
         "jsonBody": "={{ { \"query_texts\": [\"enhanced due diligence high risk jurisdiction correspondent banking\"], \"n_results\": 3, \"where\": {\"regulation\": {\"$in\": [\"Reg 14\", \"Reg 2\", \"Reg 9\"]}} } }}",
         "options": {}
       },
-      "notes": "RAG retrieval grounding the EDD memo strictly in Reg 14 §1, Reg 2 §16(b)/§17 and Reg 9 §2 clause text."
+      "notes": "RAG retrieval grounding the EDD memo strictly in Reg 14 \u00a71, Reg 2 \u00a716(b)/\u00a717 and Reg 9 \u00a72 clause text."
     },
     {
       "id": "243ae44c-07db-48a9-8d32-b5b3e07e1b4a",
@@ -660,21 +699,21 @@
       "parameters": {
         "method": "POST",
         "url": "https://api.groq.com/openai/v1/chat/completions",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
+        "authentication": "none",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
-              "name": "Content-Type",
-              "value": "application/json"
+              "name": "Authorization",
+              "value": "=Bearer {{$env.GROQ_API_KEY}}"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ { \"model\": \"llama-3.3-70b-versatile\", \"messages\": [ {\"role\": \"system\", \"content\": \"Draft a concise EDD case memo. Cite ONLY the retrieved regulation clause text verbatim by reference (e.g. 'per Regulation 14 §1'); never invent a citation.\"}, {\"role\": \"user\", \"content\": \"Customer: \" + $node[\"Fetch Customer & Txn Geo-Data\"].json.full_name + \". Counterparty country: \" + $node[\"Fetch Customer & Txn Geo-Data\"].json.counterparty_country + \". Regulation context: \" + $node[\"Query Vector Store - EDD Memo\"].json.documents[0].join(\" \") } ], \"temperature\": 0.2 } }}",
-        "options": {}
+        "jsonBody": "={{ { \"model\": \"llama-3.3-70b-versatile\", \"messages\": [ {\"role\": \"system\", \"content\": \"Draft a concise EDD case memo. Cite ONLY the retrieved regulation clause text verbatim by reference (e.g. 'per Regulation 14 \u00a71'); never invent a citation.\"}, {\"role\": \"user\", \"content\": \"Customer: \" + $node[\"Fetch Customer & Txn Geo-Data\"].json.full_name + \". Counterparty country: \" + $node[\"Fetch Customer & Txn Geo-Data\"].json.counterparty_country + \". Regulation context: \" + $node[\"Query Vector Store - EDD Memo\"].json.documents[0].join(\" \") } ], \"temperature\": 0.2 } }}",
+        "options": {},
+        "contentType": "json"
       },
       "credentials": {
         "httpHeaderAuth": {
@@ -693,6 +732,7 @@
         620
       ],
       "parameters": {
+        "resource": "database",
         "operation": "executeQuery",
         "query": "INSERT INTO jurisdiction_list (country_name, risk_tier, counter_measure) VALUES ('{{$json.country}}', '{{$json.risk_tier}}', CASE WHEN '{{$json.risk_tier}}' = 'high_risk' THEN 'EDD Required' WHEN '{{$json.risk_tier}}' = 'monitored' THEN 'Enhanced Monitoring' ELSE NULL END) ON CONFLICT (country_name) DO UPDATE SET risk_tier = '{{$json.risk_tier}}', counter_measure = EXCLUDED.counter_measure, updated_at = now() RETURNING jurisdiction_id;"
       },
@@ -708,6 +748,7 @@
         620
       ],
       "parameters": {
+        "resource": "database",
         "operation": "executeQuery",
         "query": "SELECT customer_id FROM customers WHERE country = '{{$node[\"Update Jurisdiction List\"].json.country_name || $json.country}}';"
       },
@@ -738,6 +779,7 @@
         560
       ],
       "parameters": {
+        "resource": "database",
         "operation": "executeQuery",
         "query": "INSERT INTO risk_profiles (customer_id, risk_rating, rating_basis) VALUES ({{$json.customer_id}}, 'high', 'High-Risk Jurisdiction Re-Designation') ON CONFLICT (customer_id) DO UPDATE SET risk_rating = 'high', rating_basis = 'High-Risk Jurisdiction Re-Designation', last_reviewed = now();"
       },
@@ -753,6 +795,7 @@
         560
       ],
       "parameters": {
+        "resource": "database",
         "operation": "executeQuery",
         "query": "INSERT INTO alerts (related_table, related_id, alert_type, severity, status) VALUES ('customers', {{$json.customer_id}}, 'JURISDICTION_RISK', 'high', 'open');"
       },
@@ -768,8 +811,8 @@
         300
       ],
       "parameters": {
-        "mode": "chooseBranch",
-        "output": "input1"
+        "mode": "append",
+        "numberInputs": 2
       },
       "notes": "Reconciles Route A (transaction screening) and Route B (batch re-screening) into a single downstream path for dashboard refresh, notification and audit logging."
     },
@@ -783,6 +826,7 @@
         300
       ],
       "parameters": {
+        "resource": "database",
         "operation": "executeQuery",
         "query": "UPDATE alerts SET status = 'processed' WHERE alert_type = 'JURISDICTION_RISK' AND status = 'open';"
       },
@@ -800,7 +844,11 @@
       "parameters": {
         "resource": "message",
         "operation": "post",
-        "channel": "#georisk-alerts",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#georisk-alerts"
+        },
         "text": "=EXPOSURE WARN: {{$json.country}} elevated to {{$json.risk_tier}}. Cross-border counter-measures applied."
       },
       "notes": "Real-time notification to the compliance team's monitoring channel."
@@ -832,6 +880,7 @@
         300
       ],
       "parameters": {
+        "resource": "database",
         "operation": "executeQuery",
         "query": "INSERT INTO audit_logs (workflow_name, action, actor, reference_table, reference_id, details) VALUES ('HighRisk_Jurisdiction_Countermeasures_Orchestration', 'RISK_RESCREEN_COMPLETED', 'system', 'jurisdiction_list', {{$json.jurisdiction_id || 0}}, '{{$json.toJsonString ? $json.toJsonString() : JSON.stringify($json)}}'::jsonb);"
       },
@@ -1200,16 +1249,16 @@
       "main": [
         [
           {
-            "node": "Elevate Profile Risk (Batch)",
+            "node": "Merge Branches",
             "type": "main",
-            "index": 0
+            "index": 1
           }
         ],
         [
           {
-            "node": "Merge Branches",
+            "node": "Elevate Profile Risk (Batch)",
             "type": "main",
-            "index": 1
+            "index": 0
           }
         ]
       ]
