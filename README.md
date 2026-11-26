@@ -1,17 +1,19 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="SBP AML/CFT Compliance Automation" width="100%">
+  <img src="assets/banner.svg" alt="Complyflow: SBP AML/CFT compliance automation" width="100%">
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/n8n-workflows-EA4B71?logo=n8n&logoColor=white" alt="n8n">
-  <img src="https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL">
-  <img src="https://img.shields.io/badge/FastAPI-ML%20services-009688?logo=fastapi&logoColor=white" alt="FastAPI">
-  <img src="https://img.shields.io/badge/scikit--learn-calibrated%20models-F7931E?logo=scikitlearn&logoColor=white" alt="scikit-learn">
-  <img src="https://img.shields.io/badge/Chroma-RAG-5A3FC0" alt="Chroma RAG">
-  <img src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white" alt="Docker">
+  <img src="https://img.shields.io/badge/n8n-workflows-0E4D33?logo=n8n&logoColor=C8F04A" alt="n8n">
+  <img src="https://img.shields.io/badge/PostgreSQL-16-0E4D33?logo=postgresql&logoColor=C8F04A" alt="PostgreSQL">
+  <img src="https://img.shields.io/badge/FastAPI-ML%20services-0E4D33?logo=fastapi&logoColor=C8F04A" alt="FastAPI">
+  <img src="https://img.shields.io/badge/scikit--learn-calibrated%20models-0E4D33?logo=scikitlearn&logoColor=C8F04A" alt="scikit-learn">
+  <img src="https://img.shields.io/badge/Chroma-RAG-0E4D33" alt="Chroma RAG">
+  <img src="https://img.shields.io/badge/Docker-compose-0E4D33?logo=docker&logoColor=C8F04A" alt="Docker">
 </p>
 
-# SBP AML/CFT Compliance Automation
+# Complyflow
+
+**SBP AML/CFT compliance automation**
 
 A sandbox project that automates five use cases from the **State Bank of Pakistan (SBP) AML/CFT/CPF Regulations** with n8n workflows, a PostgreSQL system of record, small calibrated ML models, and a retrieval (RAG) layer over the regulation text.
 

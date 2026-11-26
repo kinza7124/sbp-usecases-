@@ -1,76 +1,51 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-label="SBP AML/CFT Compliance Automation">
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="Complyflow: SBP AML/CFT compliance automation">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#07131F"/>
-      <stop offset="1" stop-color="#0A2230"/>
-    </linearGradient>
-    <radialGradient id="glow1" cx="0.18" cy="0.35" r="0.45">
-      <stop offset="0" stop-color="#10B981" stop-opacity="0.28"/>
-      <stop offset="1" stop-color="#10B981" stop-opacity="0"/>
-    </radialGradient>
-    <radialGradient id="glow2" cx="0.92" cy="0.95" r="0.5">
-      <stop offset="0" stop-color="#3B82F6" stop-opacity="0.22"/>
-      <stop offset="1" stop-color="#3B82F6" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="shield" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#34D399"/>
-      <stop offset="1" stop-color="#0EA5E9"/>
-    </linearGradient>
-    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse">
-      <circle cx="2" cy="2" r="1.2" fill="#FFFFFF" fill-opacity="0.06"/>
-    </pattern>
+    <symbol id="mark" viewBox="0 0 120 120">
+      <path d="M60 8 L102 23 C104 24 105 26 105 28 V58 C105 85 87 104 60 113 C33 104 15 85 15 58 V28 C15 26 16 24 18 23 Z" fill="#C8F04A"/>
+      <path d="M38 61 L53 76 L84 45" fill="none" stroke="#0E4D33" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="84" cy="45" r="0" fill="#0E4D33"/>
+    </symbol>
   </defs>
+  <style>
+    .f{font-family:'Segoe UI Variable Display','Segoe UI','Inter','Helvetica Neue',Arial,sans-serif}
+  </style>
+  <rect width="1280" height="640" rx="28" fill="#0A3B27"/>
 
-  <rect width="1280" height="400" rx="24" fill="url(#bg)"/>
-  <rect width="1280" height="400" rx="24" fill="url(#dots)"/>
-  <rect width="1280" height="400" rx="24" fill="url(#glow1)"/>
-  <rect width="1280" height="400" rx="24" fill="url(#glow2)"/>
-  <rect x="0.5" y="0.5" width="1279" height="399" rx="23.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.08"/>
+  <!-- tile 1: mark -->
+  <rect x="20" y="20" width="400" height="290" rx="20" fill="#0E4D33"/>
+  <use href="#mark" x="150" y="70" width="140" height="140"/>
+  <text class="f" x="220" y="262" text-anchor="middle" fill="#C8F04A" font-size="40" font-weight="800" letter-spacing="-1.5">complyflow</text>
 
-  <!-- mark -->
-  <g transform="translate(96,92)">
-    <rect x="-18" y="-18" width="216" height="216" rx="48" fill="#FFFFFF" fill-opacity="0.04" stroke="#FFFFFF" stroke-opacity="0.10"/>
-    <path d="M90 6 L166 34 V92 C166 138 133 170 90 184 C47 170 14 138 14 92 V34 Z" fill="url(#shield)"/>
-    <path d="M90 6 L166 34 V92 C166 138 133 170 90 184 C47 170 14 138 14 92 V34 Z" fill="none" stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="2"/>
-    <g stroke="#07131F" stroke-opacity="0.55" stroke-width="4" stroke-linecap="round">
-      <line x1="54" y1="62" x2="90" y2="46"/><line x1="90" y1="46" x2="126" y2="62"/>
-    </g>
-    <g fill="#07131F" fill-opacity="0.75"><circle cx="90" cy="46" r="8"/><circle cx="54" cy="62" r="7"/><circle cx="126" cy="62" r="7"/></g>
-    <path d="M58 104 L80 126 L124 82" fill="none" stroke="#FFFFFF" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- tile 2: headline -->
+  <rect x="440" y="20" width="820" height="290" rx="20" fill="#C8F04A"/>
+  <text class="f" x="484" y="70" fill="#0E4D33" font-size="15" font-weight="700" letter-spacing="2.5">SBP AML / CFT / CPF · SANDBOX</text>
+  <text class="f" x="482" y="160" fill="#0A3B27" font-size="70" font-weight="800" letter-spacing="-2.5">Compliance,</text>
+  <text class="f" x="482" y="240" fill="#0A3B27" font-size="70" font-weight="800" letter-spacing="-2.5">automated and cited.</text>
+  <text class="f" x="484" y="282" fill="#0E4D33" font-size="19" font-weight="500">n8n workflows grounded in the State Bank of Pakistan regulations.</text>
+
+  <!-- tile 3: use cases -->
+  <rect x="20" y="330" width="620" height="290" rx="20" fill="#DCEFE0"/>
+  <text class="f" x="60" y="380" fill="#0E4D33" font-size="15" font-weight="700" letter-spacing="2.5">FIVE USE CASES</text>
+  <g class="f" font-size="20" font-weight="600">
+    <g transform="translate(60,404)"><rect width="250" height="46" rx="23" fill="#0E4D33"/><text x="22" y="30" fill="#C8F04A">UC4</text><text x="76" y="30" fill="#FFFFFF">Sanctions &amp; PEP</text></g>
+    <g transform="translate(324,404)"><rect width="230" height="46" rx="23" fill="#0E4D33"/><text x="22" y="30" fill="#C8F04A">UC7</text><text x="76" y="30" fill="#FFFFFF">NGO titles</text></g>
+    <g transform="translate(60,462)"><rect width="250" height="46" rx="23" fill="#0E4D33"/><text x="22" y="30" fill="#C8F04A">UC10</text><text x="86" y="30" fill="#FFFFFF">CDD reliance</text></g>
+    <g transform="translate(324,462)"><rect width="230" height="46" rx="23" fill="#0E4D33"/><text x="22" y="30" fill="#C8F04A">UC11</text><text x="86" y="30" fill="#FFFFFF">Jurisdictions</text></g>
+    <g transform="translate(60,520)"><rect width="250" height="46" rx="23" fill="#0E4D33"/><text x="22" y="30" fill="#C8F04A">UC14</text><text x="86" y="30" fill="#FFFFFF">Record retention</text></g>
   </g>
+  <text class="f" x="60" y="598" fill="#0E4D33" fill-opacity="0.7" font-size="15">Humans approve every compliance decision.</text>
 
-  <!-- text -->
-  <g font-family="'Segoe UI', 'Inter', 'Helvetica Neue', Arial, sans-serif">
-    <g transform="translate(360,92)">
-      <rect width="232" height="34" rx="17" fill="#10B981" fill-opacity="0.14" stroke="#34D399" stroke-opacity="0.45"/>
-      <circle cx="20" cy="17" r="5" fill="#34D399"/>
-      <text x="34" y="23" fill="#A7F3D0" font-size="15" font-weight="600" letter-spacing="1.2">AML / CFT / CPF · SANDBOX</text>
-    </g>
-    <text x="358" y="190" fill="#F8FAFC" font-size="56" font-weight="700" letter-spacing="-1">SBP Compliance Automation</text>
-    <text x="360" y="234" fill="#94A3B8" font-size="22">Regulation-grounded n8n workflows with calibrated ML and clause-cited RAG</text>
-
-    <g font-size="15" font-weight="600" fill="#E2E8F0">
-      <g transform="translate(360,272)">
-        <rect width="168" height="36" rx="10" fill="#FFFFFF" fill-opacity="0.06" stroke="#FFFFFF" stroke-opacity="0.12"/>
-        <text x="16" y="23"><tspan fill="#34D399">UC4</tspan>  Sanctions &amp; PEP</text>
-      </g>
-      <g transform="translate(540,272)">
-        <rect width="150" height="36" rx="10" fill="#FFFFFF" fill-opacity="0.06" stroke="#FFFFFF" stroke-opacity="0.12"/>
-        <text x="16" y="23"><tspan fill="#34D399">UC7</tspan>  NGO Titles</text>
-      </g>
-      <g transform="translate(702,272)">
-        <rect width="166" height="36" rx="10" fill="#FFFFFF" fill-opacity="0.06" stroke="#FFFFFF" stroke-opacity="0.12"/>
-        <text x="16" y="23"><tspan fill="#34D399">UC10</tspan>  CDD Reliance</text>
-      </g>
-      <g transform="translate(880,272)">
-        <rect width="166" height="36" rx="10" fill="#FFFFFF" fill-opacity="0.06" stroke="#FFFFFF" stroke-opacity="0.12"/>
-        <text x="16" y="23"><tspan fill="#34D399">UC11</tspan>  Jurisdictions</text>
-      </g>
-      <g transform="translate(1058,272)">
-        <rect width="150" height="36" rx="10" fill="#FFFFFF" fill-opacity="0.06" stroke="#FFFFFF" stroke-opacity="0.12"/>
-        <text x="16" y="23"><tspan fill="#34D399">UC14</tspan>  Retention</text>
-      </g>
-    </g>
-    <text x="360" y="350" fill="#64748B" font-size="15" letter-spacing="0.5">n8n  ·  PostgreSQL  ·  FastAPI  ·  scikit-learn  ·  Chroma  ·  Docker</text>
+  <!-- tile 4: stats -->
+  <rect x="660" y="330" width="600" height="290" rx="20" fill="#0E4D33"/>
+  <g class="f">
+    <text x="700" y="380" fill="#C8F04A" font-size="15" font-weight="700" letter-spacing="2.5">BY THE NUMBERS</text>
+    <text x="700" y="478" fill="#FFFFFF" font-size="72" font-weight="800" letter-spacing="-2">5</text>
+    <text x="700" y="512" fill="#DCEFE0" font-size="17">n8n workflows</text>
+    <text x="870" y="478" fill="#FFFFFF" font-size="72" font-weight="800" letter-spacing="-2">268</text>
+    <text x="870" y="512" fill="#DCEFE0" font-size="17">regulation clauses (RAG)</text>
+    <text x="1090" y="478" fill="#C8F04A" font-size="72" font-weight="800" letter-spacing="-2">.97</text>
+    <text x="1090" y="512" fill="#DCEFE0" font-size="17">ROC-AUC exposure</text>
+    <line x1="700" y1="548" x2="1220" y2="548" stroke="#FFFFFF" stroke-opacity="0.14"/>
+    <text x="700" y="590" fill="#DCEFE0" fill-opacity="0.75" font-size="16">n8n · PostgreSQL · FastAPI · scikit-learn · Chroma · Docker</text>
   </g>
 </svg>
