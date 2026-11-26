@@ -1,22 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160" role="img" aria-label="SBP AML/CFT Compliance Automation logo">
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180" role="img" aria-label="SBP Compliance Automation logo">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0F7B5F"/>
-      <stop offset="1" stop-color="#0B3B5C"/>
+    <linearGradient id="shield" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#34D399"/>
+      <stop offset="1" stop-color="#0EA5E9"/>
     </linearGradient>
   </defs>
-  <path d="M80 10 L138 32 V78 C138 113 113 139 80 150 C47 139 22 113 22 78 V32 Z" fill="url(#g)"/>
-  <path d="M80 22 L127 40 V78 C127 106 107 128 80 138 C53 128 33 106 33 78 V40 Z" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="2"/>
-  <g stroke="#CDEFE4" stroke-width="3" stroke-linecap="round">
-    <line x1="52" y1="62" x2="80" y2="50"/>
-    <line x1="80" y1="50" x2="108" y2="62"/>
-    <line x1="52" y1="62" x2="52" y2="80"/>
-    <line x1="108" y1="62" x2="108" y2="80"/>
+  <rect width="180" height="180" rx="40" fill="#07131F"/>
+  <g transform="translate(0,0)">
+    <path d="M90 22 L148 44 V88 C148 124 123 148 90 159 C57 148 32 124 32 88 V44 Z" fill="url(#shield)"/>
+    <g stroke="#07131F" stroke-opacity="0.55" stroke-width="3.5" stroke-linecap="round">
+      <line x1="62" y1="66" x2="90" y2="54"/><line x1="90" y1="54" x2="118" y2="66"/>
+    </g>
+    <g fill="#07131F" fill-opacity="0.75"><circle cx="90" cy="54" r="6.5"/><circle cx="62" cy="66" r="5.5"/><circle cx="118" cy="66" r="5.5"/></g>
+    <path d="M65 99 L82 116 L116 82" fill="none" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
-  <g fill="#FFFFFF">
-    <circle cx="80" cy="50" r="7"/>
-    <circle cx="52" cy="62" r="6"/>
-    <circle cx="108" cy="62" r="6"/>
-  </g>
-  <path d="M60 92 L74 106 L102 78" fill="none" stroke="#F2C14E" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
